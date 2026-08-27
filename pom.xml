@@ -1,0 +1,97 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- Boot 4.1, matching life-api's line rather than message-inspector's 3.5. Greenfield,
+         so there is no migration debt to trade against. 4.1.1 is the newest patch as of
+         2026-08-27; the line is still young, so bump early. -->
+    <parent>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-parent</artifactId>
+        <version>4.1.1</version>
+        <relativePath/>
+    </parent>
+
+    <groupId>com.notification.platform</groupId>
+    <artifactId>notification-platform</artifactId>
+    <version>0.0.1-SNAPSHOT</version>
+    <packaging>pom</packaging>
+
+    <name>notification-platform</name>
+    <description>Event-driven notification platform: an HTTP ingress and a dispatch worker over Kafka.</description>
+
+    <!-- This root is both the aggregator and the parent of the three modules. Two of them
+         are deployables; notification-common is a plain library and deliberately does NOT
+         apply spring-boot-maven-plugin (repackage would rewrite its jar into
+         BOOT-INF/classes and the other modules could no longer consume it). -->
+    <modules>
+        <module>notification-common</module>
+        <module>notification-api</module>
+        <module>notification-worker</module>
+    </modules>
+
+    <properties>
+        <java.version>21</java.version>
+        <!-- Testcontainers is version-managed by the Boot parent; nothing pinned here on
+             purpose, so a parent bump carries it. -->
+    </properties>
+
+    <dependencyManagement>
+        <dependencies>
+            <!-- So api and worker can depend on the contract module without repeating the
+                 version. -->
+            <dependency>
+                <groupId>com.notification.platform</groupId>
+                <artifactId>notification-common</artifactId>
+                <version>${project.version}</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <dependencies>
+        <!-- Every module gets the test harness; nothing else is global. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <plugins>
+            <!-- Same Docker API pin message-inspector and life-api carry, and for the same
+                 reason: docker-java defaults to Docker API 1.32, below the 1.40 minimum
+                 enforced by Docker Engine 29+, which fails with the misleading "Could not
+                 find a valid Docker environment". Do not remove. -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <configuration>
+                    <argLine>-Djdk.attach.allowAttachSelf -XX:+EnableDynamicAgentLoading -Dapi.version=1.44</argLine>
+                </configuration>
+            </plugin>
+
+            <!-- Failsafe runs the *IT tests, which surefire's default includes skip, so the
+                 split is:
+                   ./mvnw test     -> unit only, no Docker needed
+                   ./mvnw verify   -> unit + *IT (Testcontainers, needs Docker) -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-failsafe-plugin</artifactId>
+                <configuration>
+                    <argLine>-Djdk.attach.allowAttachSelf -XX:+EnableDynamicAgentLoading -Dapi.version=1.44</argLine>
+                </configuration>
+                <executions>
+                    <execution>
+                        <goals>
+                            <goal>integration-test</goal>
+                            <goal>verify</goal>
+                        </goals>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>

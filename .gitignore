@@ -1,0 +1,50 @@
+# IntelliJ IDEA
+.idea/
+*.iml
+*.iws
+out/
+
+# Maven
+target/
+pom.xml.tag
+pom.xml.releaseBackup
+pom.xml.versionsBackup
+pom.xml.next
+release.properties
+
+# Compiler output
+*.class
+
+# Logs
+*.log
+
+# Eclipse (if used)
+.project
+.classpath
+.settings/
+bin/
+
+# VS Code (if used)
+.vscode/
+
+# Test / coverage reports
+test-output/
+coverage/
+jacoco*.exec
+
+# Temporary files
+*.swp
+*.tmp
+*.bak
+*.orig
+
+# OS
+.DS_Store
+Thumbs.db
+ehthumbs.db
+desktop.ini
+
+# Local environment files
+.env
+.env.*
+http/http-client.private.env.json
