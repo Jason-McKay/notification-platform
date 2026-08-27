@@ -7,7 +7,7 @@ package com.notification.platform.common.event;
  * constant is a breaking change for anything already on the queue.
  */
 public enum NotificationChannel {
-    EMAIL,
-    SMS,
-    PUSH
+  EMAIL,
+  SMS,
+  PUSH
 }
