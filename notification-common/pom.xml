@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <parent>
+        <groupId>com.notification.platform</groupId>
+        <artifactId>notification-platform</artifactId>
+        <version>0.0.1-SNAPSHOT</version>
+    </parent>
+
+    <artifactId>notification-common</artifactId>
+    <packaging>jar</packaging>
+
+    <name>notification-common</name>
+    <description>The wire contract shared by the api and the worker.</description>
+
+    <!-- No compile dependencies on purpose. This module is the contract, and a contract
+         that drags Spring, Kafka or validation config across the boundary stops being one.
+         Jackson (3.x, the line Boot 4 ships) is test-scope only: the records are plain
+         enough for it to handle without annotations, and the round-trip test proves it.
+
+         NOTE: no spring-boot-maven-plugin here. Repackage would rewrite this jar into
+         BOOT-INF/classes and the api and worker could no longer consume it. -->
+    <dependencies>
+        <dependency>
+            <groupId>tools.jackson.core</groupId>
+            <artifactId>jackson-databind</artifactId>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+</project>
