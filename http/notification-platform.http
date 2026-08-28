@@ -1,0 +1,121 @@
+### Runnable end-to-end scenario for the platform.
+#
+# Select the `dev` environment from http-client.env.json before running. Works in
+# IntelliJ's HTTP Client and VS Code's REST Client. Bring the stack up first:
+#
+#   docker compose up --build
+#
+# Note the two hosts: writes go to the api on :8080, the delivery status read is served by
+# the worker on :8081, because the worker owns those tables (docs/adr/0003).
+
+### Get a bearer token (the api mints it; the worker verifies the same one)
+# @name token
+POST {{apiHost}}/api/auth/token
+Content-Type: application/json
+
+{
+  "clientId": "{{clientId}}",
+  "clientSecret": "{{clientSecret}}"
+}
+
+> {%
+    client.global.set("accessToken", response.body.accessToken);
+    client.test("token issued", function() {
+        client.assert(response.status === 200, "expected 200");
+    });
+%}
+
+### Unauthenticated write is rejected -- the API is closed by default
+POST {{apiHost}}/api/notifications
+Content-Type: application/json
+
+{
+  "recipientId": "user-42",
+  "channel": "EMAIL",
+  "templateKey": "order-shipped",
+  "payload": {"orderId": "A-1001"}
+}
+
+> {%
+    client.test("401 without a token", function() {
+        client.assert(response.status === 401, "expected 401, got " + response.status);
+    });
+%}
+
+### Accept a notification (202, and the event id to track it by)
+# @name accept
+POST {{apiHost}}/api/notifications
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: demo-key-001
+
+{
+  "recipientId": "user-42",
+  "channel": "EMAIL",
+  "templateKey": "order-shipped",
+  "payload": {"orderId": "A-1001"}
+}
+
+> {%
+    client.global.set("eventId", response.body.eventId);
+    client.test("accepted", function() {
+        client.assert(response.status === 202, "expected 202");
+        client.assert(response.body.duplicate === false, "first send should not be a duplicate");
+    });
+%}
+
+### Same Idempotency-Key again -- same event id, nothing new published
+POST {{apiHost}}/api/notifications
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+Idempotency-Key: demo-key-001
+
+{
+  "recipientId": "user-42",
+  "channel": "EMAIL",
+  "templateKey": "order-shipped",
+  "payload": {"orderId": "A-1001"}
+}
+
+> {%
+    client.test("recognised as a replay", function() {
+        client.assert(response.status === 202, "expected 202");
+        client.assert(response.body.duplicate === true, "expected duplicate=true");
+        client.assert(response.body.eventId === client.global.get("eventId"),
+            "expected the original event id back");
+    });
+%}
+
+### Delivery status, from the worker (give it a moment to consume)
+GET {{workerHost}}/api/notifications/{{eventId}}
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("delivered", function() {
+        client.assert(response.status === 200, "expected 200");
+        client.assert(response.body.status === "SENT", "expected SENT, got " + response.body.status);
+        client.assert(response.body.attempts.length === 1, "expected exactly one attempt");
+    });
+%}
+
+### A recipient's second notification, without an idempotency key (dedupe is opt-in)
+POST {{apiHost}}/api/notifications
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "recipientId": "user-42",
+  "channel": "SMS",
+  "templateKey": "order-delivered",
+  "payload": {"orderId": "A-1001"}
+}
+
+### Unknown event id is a 404, not an empty 200
+GET {{workerHost}}/api/notifications/00000000-0000-0000-0000-000000000000
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("404 for an unknown id", function() {
+        client.assert(response.status === 404, "expected 404");
+    });
+%}
