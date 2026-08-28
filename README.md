@@ -37,6 +37,10 @@ curl -s -X POST localhost:8080/api/notifications \
 curl -s localhost:8081/api/notifications/<eventId> -H "Authorization: Bearer $TOKEN"
 ```
 
+That token carries both scopes the platform enforces: `notifications.write` for the write on
+the api, `notifications.read` for the status read on the worker. A token that authenticates
+but lacks the scope a route asks for gets a 403.
+
 Swagger UI (dev profile only): http://localhost:8080/api/swagger-ui.html
 
 ## Building

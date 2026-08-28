@@ -132,14 +132,14 @@ Most of these cost real time on the way in.
 
 ## Known gaps
 
-- **The `scope` claim is minted but not enforced.** `TokenService` puts
-  `scope: notifications.write` in the token, and both `SecurityConfig`s stop at
-  `.anyRequest().authenticated()`, so any valid token can call anything. First item on the
-  roadmap.
 - The dev token endpoint (`POST /api/auth/token`) is a stand-in for an identity provider:
   one configured client credential, HS256, no user store. Both applications share
   `notification.jwt.secret`, which is what symmetric signing costs. An IdP with JWKS is the
   API Gateway project's job.
+- **Scopes separate the routes, not the callers.** `notifications.write` guards the api's
+  POST and `notifications.read` the worker's GET (`Scopes` in `notification-common`, so the
+  minting side and the two verifying sides cannot drift), but there is one client credential
+  and it is minted both. Different clients getting different scopes needs the IdP above.
 - Senders are `LoggingNotificationSender` stand-ins, one per channel. Nothing is actually
   delivered anywhere yet, and `templateKey` is only logged — there is no rendering.
 - The DLT is proven only for a record that fails to deserialize. A sender that throws takes
