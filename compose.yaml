@@ -1,0 +1,113 @@
+# One-command local run of the whole platform:
+#
+#   docker compose up --build
+#
+# Brings up both applications (built from their module Dockerfiles) with their own Kafka,
+# Redis and MySQL. The api is on http://localhost:8080 (Swagger at
+# http://localhost:8080/api/swagger-ui.html) and the worker's status read on
+# http://localhost:8081.
+#
+# Self-contained on purpose: it does NOT use the shared ../infrastructure stack. Container
+# names are prefixed np- and host ports are shifted off the defaults so this can run beside
+# that stack's dev-redis:6379 / dev-mysql:3306. The api's 8080 still collides with
+# message-inspector -- run one at a time.
+services:
+  kafka:
+    image: apache/kafka:3.9.0
+    container_name: np-kafka
+    ports:
+      - "19092:19092"   # host-facing listener; 9092 is for the other containers
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:19092
+      # Two listeners because the address that works inside the compose network (np-kafka)
+      # is not the one that works from the host, and a Kafka client is told where to go by
+      # the broker's advertised address, not by the address it dialled.
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://np-kafka:9092,EXTERNAL://localhost:19092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT,EXTERNAL:PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@np-kafka:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD", "/opt/kafka/bin/kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  redis:
+    image: redis:7-alpine
+    container_name: np-redis
+    ports:
+      - "6380:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  mysql:
+    image: mysql:8
+    container_name: np-mysql
+    ports:
+      - "3307:3306"
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: notifications
+      MYSQL_USER: notification
+      MYSQL_PASSWORD: notification
+    volumes:
+      - np_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  api:
+    build:
+      context: .
+      dockerfile: notification-api/Dockerfile
+    container_name: np-api
+    depends_on:
+      kafka:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Sibling containers by service name, overriding the localhost defaults in
+      # application.properties through Spring's relaxed binding.
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: np-kafka:9092
+      SPRING_DATA_REDIS_HOST: np-redis
+      # Both applications must agree on this: the tokens the api signs are the tokens the
+      # worker verifies.
+      NOTIFICATION_JWT_SECRET: dev-only-secret-please-override-me-0123456789
+    ports:
+      - "8080:8080"
+
+  worker:
+    build:
+      context: .
+      dockerfile: notification-worker/Dockerfile
+    container_name: np-worker
+    depends_on:
+      kafka:
+        condition: service_healthy
+      mysql:
+        condition: service_healthy
+    environment:
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: np-kafka:9092
+      SPRING_DATASOURCE_URL: jdbc:mysql://np-mysql:3306/notifications
+      NOTIFICATION_JWT_SECRET: dev-only-secret-please-override-me-0123456789
+    ports:
+      - "8081:8081"
+
+volumes:
+  np_mysql_data:
