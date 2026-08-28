@@ -63,10 +63,15 @@ because the ITs are what cover the wiring between the two deployables.
   MySQL through Flyway's schema. `NotificationIngressIT` (api) boots the real context and
   asserts an accepted request reaches the topic.
 - **Kafka in the ITs is spring-kafka's `@EmbeddedKafka`, not Testcontainers.** Both
-  Testcontainers Kafka flavours (`apache/kafka`, `confluentinc/cp-kafka`) fail to start on
-  this machine: the image's config step runs before Testcontainers injects the advertised
-  listener, and Kafka refuses `advertised.listeners` of `0.0.0.0`. The containers exit 1
-  and the wait strategy times out. MySQL and Redis containers work fine and are used.
+  Testcontainers Kafka flavours (`apache/kafka`, `confluentinc/cp-kafka`) fail to start here:
+  they set `listeners` to `0.0.0.0`, and the image formats storage before the broker starts,
+  which rejects 0.0.0.0 as an advertised address. The containers exit 1 and the wait strategy
+  times out. MySQL and Redis containers work fine and are used.
+- `NotificationDispatchIT.poisonRecordEndsUpOnTheDeadLetterTopic` covers the record that
+  cannot be deserialized at all. It pins two things that failed in the live stack: the
+  consumer needs `ErrorHandlingDeserializer`, and the worker needs a producer that can
+  serialize both a `NotificationRequested` (listener failure) and a raw `byte[]` (poison
+  record) -- see `KafkaProducerConfig`.
 - Keep the surefire/failsafe `-Dapi.version=1.44` argLine in the root pom. docker-java
   defaults to a Docker API version below the minimum Docker Engine 29+ enforces, and the
   failure is the misleading "Could not find a valid Docker environment".
@@ -106,6 +111,13 @@ Most of these cost real time on the way in.
 - **XML comments cannot contain `--`.** An em-dash-style `--` inside a pom comment is a
   fatal "Non-parseable POM", and the message points at the comment, not the pom's real
   shape.
+- **Kafka's container listeners must be `://port`, not `://0.0.0.0:port`.** The image runs
+  `kafka-storage format` before the broker, and that step validates 0.0.0.0 as an advertised
+  address: "advertised.listeners cannot use the nonroutable meta-address". This is also why
+  Testcontainers Kafka fails here, since it sets 0.0.0.0 itself.
+- **A module image build needs every module pom**, not just its own: the aggregator refuses
+  to load if any directory in `<modules>` is missing, so both Dockerfiles copy all three
+  poms before the sources they actually compile.
 - **Port and container collisions.** The shared `infrastructure` stack holds `dev-redis`
   :6379, `dev-mysql` :3306 and `dev-artemis`; this repo's `compose.yaml` is self-contained
   and uses `np-` container names on shifted host ports (Redis 6380, MySQL 3307, Kafka
@@ -121,5 +133,7 @@ Most of these cost real time on the way in.
   API Gateway project's job.
 - Senders are `LoggingNotificationSender` stand-ins, one per channel. Nothing is actually
   delivered anywhere yet.
+- The retry topics are created by Spring Kafka on demand (`notification.requested-retry-*`);
+  only the main topic and the DLT are declared as beans.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.

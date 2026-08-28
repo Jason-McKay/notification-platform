@@ -37,8 +37,10 @@ Kafka, in KRaft mode, with:
   set so a first-ever start does not silently skip events the api already published.
 - Nothing in this repo demonstrates JMS. That overlap with message-inspector was the reason
   to choose differently, not a gap.
-- Kafka under Testcontainers did not start on the Windows dev machine (see the note in
-  CLAUDE.md), which is a cost this choice carries locally.
+- Kafka under Testcontainers does not start on the Windows dev machine: the image formats
+  storage before the broker starts and rejects the 0.0.0.0 listener Testcontainers sets, so
+  the integration tests use spring-kafka's embedded broker instead. A cost this choice
+  carries locally; CLAUDE.md has the detail.
 
 ## Alternatives considered
 
