@@ -36,8 +36,11 @@ public class KafkaTopicConfig {
 
   @Bean
   public NewTopic notificationRequestedDlt() {
+    // Same partition count as the main topic on purpose: the dead-letter recoverer maps a
+    // failed record to the same partition number it came from, and warns on every publish
+    // if that partition does not exist on the DLT.
     return TopicBuilder.name(Topics.NOTIFICATION_REQUESTED_DLT)
-        .partitions(1)
+        .partitions(partitions)
         .replicas(replicas)
         .build();
   }

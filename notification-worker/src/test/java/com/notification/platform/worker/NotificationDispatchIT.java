@@ -5,11 +5,20 @@ import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 
+import org.apache.kafka.clients.consumer.Consumer;
+import org.apache.kafka.clients.consumer.ConsumerRecords;
+import org.apache.kafka.clients.producer.ProducerConfig;
+import org.apache.kafka.common.serialization.StringDeserializer;
+import org.apache.kafka.common.serialization.StringSerializer;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
+import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
+import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.junit.jupiter.Container;
@@ -41,14 +50,11 @@ import static org.awaitility.Awaitility.await;
  * {@code ./mvnw verify} runs it under failsafe.
  */
 @SpringBootTest(properties = {
-    // The worker consumes; only this test produces, so the producer side is configured here
-    // rather than in the application's own properties.
-    "spring.kafka.producer.value-serializer=org.springframework.kafka.support.serializer.JacksonJsonSerializer",
-    "spring.kafka.producer.properties.spring.json.add.type.headers=false",
     "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
+    // One attempt, so a failing record reaches the DLT without waiting out the backoff.
     "notification.consumer.attempts=1"
 })
-@EmbeddedKafka(topics = Topics.NOTIFICATION_REQUESTED, partitions = 1)
+@EmbeddedKafka(topics = {Topics.NOTIFICATION_REQUESTED, Topics.NOTIFICATION_REQUESTED_DLT}, partitions = 1)
 @Testcontainers
 class NotificationDispatchIT {
 
@@ -64,13 +70,16 @@ class NotificationDispatchIT {
   }
 
   @Autowired
-  private KafkaTemplate<Object, Object> kafkaTemplate;
+  private KafkaTemplate<String, Object> kafkaTemplate;
 
   @Autowired
   private NotificationRepository notifications;
 
   @Autowired
   private DeliveryAttemptRepository attempts;
+
+  @Autowired
+  private EmbeddedKafkaBroker broker;
 
   @Test
   void deliversAnEventAndRecordsTheAttempt() {
@@ -106,6 +115,31 @@ class NotificationDispatchIT {
     // before asserting that it did not.
     await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(10)).untilAsserted(() ->
         assertThat(attempts.findByEventIdOrderByAttemptedAtAsc(event.eventId())).hasSize(1));
+  }
+
+  @Test
+  void poisonRecordEndsUpOnTheDeadLetterTopic() {
+    // A record the worker cannot deserialize at all. It fails before the listener runs, so
+    // only ErrorHandlingDeserializer sees it -- and republishing it needs a producer that can
+    // serialize the original bytes. Boot's default StringSerializer cannot, and the
+    // dead-letter publication then fails silently in a loop that stalls the partition.
+    KafkaTemplate<String, String> raw = new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(
+        Map.of(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, broker.getBrokersAsString()),
+        new StringSerializer(), new StringSerializer()));
+    raw.send(Topics.NOTIFICATION_REQUESTED, "user-99", "this-is-not-json");
+
+    Map<String, Object> props =
+        KafkaTestUtils.consumerProps(broker.getBrokersAsString(), "dlt-it", "true");
+    try (Consumer<String, String> dlt = new DefaultKafkaConsumerFactory<>(
+        props, new StringDeserializer(), new StringDeserializer()).createConsumer()) {
+      broker.consumeFromAnEmbeddedTopic(dlt, Topics.NOTIFICATION_REQUESTED_DLT);
+
+      ConsumerRecords<String, String> records =
+          KafkaTestUtils.getRecords(dlt, Duration.ofSeconds(30), 1);
+
+      assertThat(records.records(Topics.NOTIFICATION_REQUESTED_DLT)).singleElement()
+          .satisfies(record -> assertThat(record.value()).isEqualTo("this-is-not-json"));
+    }
   }
 
   private static NotificationRequested event(UUID eventId) {
