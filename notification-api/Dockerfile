@@ -8,10 +8,13 @@
 FROM maven:3.9.9-eclipse-temurin-21 AS build
 WORKDIR /build
 
-# Poms first, so the dependency layer is cached unless a pom changes.
+# Poms first, so the dependency layer is cached unless a pom changes. ALL of them: the
+# aggregator lists three modules and refuses to load if any of their poms is missing,
+# even when only one module is being built.
 COPY pom.xml .
 COPY notification-common/pom.xml notification-common/
 COPY notification-api/pom.xml notification-api/
+COPY notification-worker/pom.xml notification-worker/
 RUN mvn -B -q -pl notification-api -am dependency:go-offline
 
 # Then the sources. Tests are skipped here: they need Docker (Testcontainers) and are the

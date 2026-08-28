@@ -21,7 +21,11 @@ services:
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
       CLUSTER_ID: 5L6g3nShT-eMCtK--X86sw
-      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:9092,CONTROLLER://0.0.0.0:9093,EXTERNAL://0.0.0.0:19092
+      # Bind form is "://port", NOT "://0.0.0.0:port". The image runs kafka-storage format
+      # before the broker starts, and that step validates 0.0.0.0 as an advertised address
+      # and dies with "advertised.listeners cannot use the nonroutable meta-address". It is
+      # the same failure Testcontainers hits (see CLAUDE.md).
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093,EXTERNAL://:19092
       # Two listeners because the address that works inside the compose network (np-kafka)
       # is not the one that works from the host, and a Kafka client is told where to go by
       # the broker's advertised address, not by the address it dialled.
