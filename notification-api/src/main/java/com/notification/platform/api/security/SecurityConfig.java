@@ -2,14 +2,20 @@ package com.notification.platform.api.security;
 
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
 import org.springframework.security.web.SecurityFilterChain;
 
+import com.notification.platform.common.security.Scopes;
+
 /**
  * Stateless bearer-token security. Every route needs a valid JWT except the token endpoint
  * itself, the health probe, {@code /error}, and the dev-only API docs.
+ *
+ * <p>The write additionally needs {@code notifications.write}. A token that authenticates
+ * but lacks the scope gets 403, not 401 -- we know who you are, you may not do this.
  */
 @Configuration
 @EnableWebSecurity
@@ -35,6 +41,9 @@ public class SecurityConfig {
             "/api/swagger-ui/**",
             "/api/api-docs/**")
           .permitAll()
+        // Authenticated is not authorised: the write needs the scope that names it, or a
+        // token minted for reading would be enough to publish.
+        .requestMatchers(HttpMethod.POST, "/api/notifications").hasAuthority(Scopes.WRITE_AUTHORITY)
         .anyRequest().authenticated())
       .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
       }));

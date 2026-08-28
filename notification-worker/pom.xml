@@ -78,6 +78,18 @@
             <optional>true</optional>
         </dependency>
 
+        <!-- Boot 4 moved the test slices out of spring-boot-test-autoconfigure into
+             per-technology modules; @WebMvcTest lives here now, not in starter-test. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-webmvc-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.springframework.security</groupId>
+            <artifactId>spring-security-test</artifactId>
+            <scope>test</scope>
+        </dependency>
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka-test</artifactId>

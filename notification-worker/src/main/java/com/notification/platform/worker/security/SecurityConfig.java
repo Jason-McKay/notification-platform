@@ -7,6 +7,7 @@ import javax.crypto.spec.SecretKeySpec;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.http.HttpMethod;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.annotation.web.configuration.EnableWebSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -14,6 +15,8 @@ import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.security.oauth2.jwt.JwtDecoder;
 import org.springframework.security.oauth2.jwt.NimbusJwtDecoder;
 import org.springframework.security.web.SecurityFilterChain;
+
+import com.notification.platform.common.security.Scopes;
 
 /**
  * The worker validates the same tokens the api issues, and mints none of its own -- decoder
@@ -45,6 +48,9 @@ public class SecurityConfig {
       .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
       .authorizeHttpRequests(auth -> auth
         .requestMatchers("/error", "/actuator/health").permitAll()
+        // The status read is a read: it takes the read scope, not the write one the api
+        // guards its ingress with.
+        .requestMatchers(HttpMethod.GET, "/api/notifications/**").hasAuthority(Scopes.READ_AUTHORITY)
         .anyRequest().authenticated())
       .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
       }));

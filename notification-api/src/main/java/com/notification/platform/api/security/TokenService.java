@@ -11,6 +11,8 @@ import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
 import org.springframework.stereotype.Service;
 
+import com.notification.platform.common.security.Scopes;
+
 import lombok.RequiredArgsConstructor;
 
 /**
@@ -46,7 +48,10 @@ public class TokenService {
         .issuedAt(now)
         .expiresAt(now.plus(tokenTtl.toSeconds(), ChronoUnit.SECONDS))
         .subject(id)
-        .claim("scope", "notifications.write")
+        // Both scopes on one token: there is a single client credential here, so the split
+        // buys separation of the routes, not of the callers. A real IdP is where different
+        // clients start getting different scopes.
+        .claim("scope", Scopes.READ + " " + Scopes.WRITE)
         .build();
     return jwtEncoder.encode(JwtEncoderParameters.from(
         JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
