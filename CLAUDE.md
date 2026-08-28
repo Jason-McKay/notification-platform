@@ -11,6 +11,11 @@ Spring Boot 4.1 / Java 21, Maven multi-module.
 It is deliberately a *platform*, not a service: it ships **two deployables**, which is the
 point of the project (portfolio project #2 — microservices + event-driven).
 
+Roadmap: `C:\Users\jason\Claude\plans\notification-platform-plan.md` — current status, the
+ordered next actions, and what is deliberately deferred. **Read it before starting
+non-trivial work.** It is kept out of this repo on purpose: the repo is headed for a public
+remote.
+
 Related repos: `C:\Users\jason\Projects\message-inspector\` (JMS/Artemis tooling; most of
 the conventions here come from it), `C:\Users\jason\Projects\life-api\` (the other Boot 4
 project), `C:\Users\jason\Projects\infrastructure\` (shared dev stack — **not** used by
@@ -127,13 +132,23 @@ Most of these cost real time on the way in.
 
 ## Known gaps
 
+- **The `scope` claim is minted but not enforced.** `TokenService` puts
+  `scope: notifications.write` in the token, and both `SecurityConfig`s stop at
+  `.anyRequest().authenticated()`, so any valid token can call anything. First item on the
+  roadmap.
 - The dev token endpoint (`POST /api/auth/token`) is a stand-in for an identity provider:
   one configured client credential, HS256, no user store. Both applications share
   `notification.jwt.secret`, which is what symmetric signing costs. An IdP with JWKS is the
   API Gateway project's job.
 - Senders are `LoggingNotificationSender` stand-ins, one per channel. Nothing is actually
-  delivered anywhere yet.
+  delivered anywhere yet, and `templateKey` is only logged — there is no rendering.
+- The DLT is proven only for a record that fails to deserialize. A sender that throws takes
+  the retry-topic path, and nothing exercises it yet.
 - The retry topics are created by Spring Kafka on demand (`notification.requested-retry-*`);
   only the main topic and the DLT are declared as beans.
+- `DispatchService` calls the sender inside the transaction. Fine for a logging sender;
+  revisit with an ADR when a real provider call arrives.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.
+- No git remote. Portfolio repos are public, so pushing needs an explicit go-ahead and a
+  look at the dev credentials in `application.properties` first.
