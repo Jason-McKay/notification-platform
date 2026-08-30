@@ -32,6 +32,7 @@ import com.notification.platform.worker.domain.DeliveryStatus;
 import com.notification.platform.worker.domain.Notification;
 import com.notification.platform.worker.repository.DeliveryAttemptRepository;
 import com.notification.platform.worker.repository.NotificationRepository;
+import com.notification.platform.worker.template.RenderedMessage;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -100,7 +101,7 @@ class NotificationRetryIT {
         }
 
         @Override
-        public void send(Notification notification) {
+        public void send(Notification notification, RenderedMessage message) {
           throw new IllegalStateException("sms provider is down");
         }
       };

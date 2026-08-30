@@ -18,6 +18,8 @@ import com.notification.platform.worker.domain.DeliveryStatus;
 import com.notification.platform.worker.domain.Notification;
 import com.notification.platform.worker.repository.DeliveryAttemptRepository;
 import com.notification.platform.worker.repository.NotificationRepository;
+import com.notification.platform.worker.template.RenderedMessage;
+import com.notification.platform.worker.template.TemplateRenderer;
 
 import lombok.extern.slf4j.Slf4j;
 
@@ -29,14 +31,16 @@ public class DispatchService {
   private final NotificationRepository notifications;
   private final DeliveryAttemptRepository attempts;
   private final Map<NotificationChannel, NotificationSender> senders;
+  private final TemplateRenderer templates;
   private final Clock clock;
 
   public DispatchService(NotificationRepository notifications, DeliveryAttemptRepository attempts,
-      List<NotificationSender> senders, Clock clock) {
+      List<NotificationSender> senders, TemplateRenderer templates, Clock clock) {
     this.notifications = notifications;
     this.attempts = attempts;
     this.senders = new EnumMap<>(NotificationChannel.class);
     senders.forEach(sender -> this.senders.put(sender.channel(), sender));
+    this.templates = templates;
     this.clock = clock;
   }
 
@@ -79,7 +83,13 @@ public class DispatchService {
       throw new IllegalStateException("no sender registered for channel " + event.channel());
     }
 
-    sender.send(notification);
+    // Rendered before the send and inside the transaction: it is a pure function, and a
+    // template that cannot be rendered is a failed delivery like any other -- recorded on
+    // the attempt, retried, then parked on the DLT.
+    RenderedMessage message =
+        templates.render(notification.getTemplateKey(), notification.getPayload());
+
+    sender.send(notification, message);
     notification.markSent(now);
     attempts.save(new DeliveryAttempt(event.eventId(), DeliveryStatus.SENT, null, now));
   }

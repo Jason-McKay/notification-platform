@@ -2,6 +2,7 @@ package com.notification.platform.worker.channel;
 
 import com.notification.platform.common.event.NotificationChannel;
 import com.notification.platform.worker.domain.Notification;
+import com.notification.platform.worker.template.RenderedMessage;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -26,9 +27,9 @@ public class LoggingNotificationSender implements NotificationSender {
   }
 
   @Override
-  public void send(Notification notification) {
-    log.info("[{}] delivering template {} to recipient {} (event {})",
-        channel, notification.getTemplateKey(), notification.getRecipientId(),
-        notification.getEventId());
+  public void send(Notification notification, RenderedMessage message) {
+    log.info("[{}] to recipient {} (event {}): {} | {}",
+        channel, notification.getRecipientId(), notification.getEventId(),
+        message.subject(), message.body());
   }
 }

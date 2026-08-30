@@ -136,6 +136,9 @@ Most of these cost real time on the way in.
   and uses `np-` container names on shifted host ports (Redis 6380, MySQL 3307, Kafka
   19092) so both can run at once. The api on :8080 still collides with message-inspector —
   run one at a time.
+- **Template placeholders are `{{name}}`, not `${name}`.** The templates live in
+  `application.properties`, and Spring resolves `${...}` itself while binding: a variable
+  spelled that way is an unresolvable placeholder and the worker will not start.
 - **Boot 4.1 is a young line.** Expect rough edges and bump patches early.
 
 ## Known gaps
@@ -148,8 +151,13 @@ Most of these cost real time on the way in.
   POST and `notifications.read` the worker's GET (`Scopes` in `notification-common`, so the
   minting side and the two verifying sides cannot drift), but there is one client credential
   and it is minted both. Different clients getting different scopes needs the IdP above.
-- Senders are `LoggingNotificationSender` stand-ins, one per channel. Nothing is actually
-  delivered anywhere yet, and `templateKey` is only logged — there is no rendering.
+- Senders are `LoggingNotificationSender` stand-ins, one per channel. The copy is rendered
+  for real and handed to them; nothing is actually delivered anywhere yet.
+- Templates are configuration (`notification.templates.*`), not a store, so changing copy is
+  a redeploy. `TemplateRenderer` takes them as a map, so a store would not reach it.
+- The api accepts any `templateKey`: it owns no templates, so an unknown key is a 202
+  followed by three failed attempts and a dead-lettered event. Validating at the edge means
+  giving the api a copy of the template keys, which is a contract to keep in step.
 - There is no RETRYING state. A failed attempt is recorded as soon as it happens, so an
   event still working its way through the retry topics reads `FAILED` between tries and only
   settles when it is SENT or reaches the DLT.
