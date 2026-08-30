@@ -6,6 +6,10 @@ public enum DeliveryStatus {
   PENDING,
   /** A sender took it. */
   SENT,
-  /** Every attempt failed; the event is on its way to the dead-letter topic. */
+  /**
+   * The last attempt failed. Set again on every failed attempt, so an event still working
+   * its way through the retry topics reads FAILED between tries; it becomes SENT if a later
+   * attempt succeeds, and stays FAILED once the event reaches the dead-letter topic.
+   */
   FAILED
 }

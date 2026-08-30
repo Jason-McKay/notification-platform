@@ -8,6 +8,7 @@ import org.springframework.stereotype.Component;
 
 import com.notification.platform.common.event.NotificationRequested;
 import com.notification.platform.common.event.Topics;
+import com.notification.platform.worker.service.DeliveryRecorder;
 import com.notification.platform.worker.service.DispatchService;
 
 import lombok.RequiredArgsConstructor;
@@ -27,6 +28,7 @@ import lombok.extern.slf4j.Slf4j;
 public class NotificationRequestedListener {
 
   private final DispatchService dispatchService;
+  private final DeliveryRecorder recorder;
 
   @RetryableTopic(
       attempts = "${notification.consumer.attempts:3}",
@@ -36,6 +38,17 @@ public class NotificationRequestedListener {
   @KafkaListener(topics = Topics.NOTIFICATION_REQUESTED, groupId = "${spring.kafka.consumer.group-id}")
   public void onNotificationRequested(NotificationRequested event) {
     log.debug("consumed event {} for recipient {}", event.eventId(), event.recipientId());
-    dispatchService.dispatch(event);
+    try {
+      dispatchService.dispatch(event);
+    } catch (RuntimeException e) {
+      // Recorded here rather than in the dispatcher because the dispatch transaction has
+      // rolled back by the time this runs: a failure written inside it would roll back with
+      // it, and the attempt would leave no trace anywhere but the DLT.
+      log.warn("delivery of event {} failed: {}", event.eventId(), e.toString());
+      recorder.recordFailedAttempt(event, e);
+      // Rethrown on purpose: the retry topics and the DLT are driven by the exception
+      // escaping this method, so swallowing it here would silently drop the event.
+      throw e;
+    }
   }
 }

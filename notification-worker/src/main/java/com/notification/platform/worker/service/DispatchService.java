@@ -44,9 +44,15 @@ public class DispatchService {
    * Dispatch one event.
    *
    * <p>Transactional with the send inside it on purpose: at this size, a sender that throws
-   * should roll the PENDING row back and let the retry topic bring the event round again,
-   * rather than leave a half-written record behind. A real provider call would be moved out
-   * of the transaction and reconciled instead -- worth an ADR when that day comes.
+   * should roll the half-written record back and let the retry topic bring the event round
+   * again, rather than leave a PENDING row nothing will ever revisit. A real provider call
+   * would be moved out of the transaction and reconciled instead -- worth an ADR when that
+   * day comes.
+   *
+   * <p>Nothing here writes the failure down, and that is the consequence of the rollback:
+   * anything this method records about a failed attempt unwinds with it. {@link
+   * DeliveryRecorder}, called by the listener once this transaction is over, is what leaves
+   * the trace.
    *
    * <p>Redelivery is expected, not exceptional: Kafka guarantees at-least-once, so this
    * checks for an existing SENT record before doing anything.
@@ -67,11 +73,9 @@ public class DispatchService {
 
     NotificationSender sender = senders.get(event.channel());
     if (sender == null) {
-      // Not retryable: another attempt cannot conjure a sender. Recorded, then thrown so
-      // the listener's retry policy exhausts and the event lands on the DLT.
-      notification.markFailed(now);
-      attempts.save(new DeliveryAttempt(event.eventId(), DeliveryStatus.FAILED,
-          "no sender for channel " + event.channel(), now));
+      // Not retryable: another attempt cannot conjure a sender. Thrown anyway, so the
+      // listener records the attempt, the retry policy exhausts, and the event lands on the
+      // DLT where someone can see it.
       throw new IllegalStateException("no sender registered for channel " + event.channel());
     }
 

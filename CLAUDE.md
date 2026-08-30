@@ -77,6 +77,14 @@ because the ITs are what cover the wiring between the two deployables.
   consumer needs `ErrorHandlingDeserializer`, and the worker needs a producer that can
   serialize both a `NotificationRequested` (listener failure) and a raw `byte[]` (poison
   record) -- see `KafkaProducerConfig`.
+- `NotificationRetryIT` covers the other half: a sender that throws deserializes fine and
+  fails *in the listener*, so it walks the retry topics before the DLT, and it asserts the
+  delivery record the caller can then read. Two traps live in it. The retry topics are named
+  after the backoff **delay**, not an attempt index (`notification.requested-retry-1000` then
+  `-retry-2000`, for 1s then 2s), so changing `@RetryableTopic`'s backoff renames them. And
+  they still have to be listed in `@EmbeddedKafka`: `consumeFromEmbeddedTopics` validates
+  against that list rather than against the broker, and rejects a topic that does exist with
+  "not in embedded topic list".
 - Keep the surefire/failsafe `-Dapi.version=1.44` argLine in the root pom. docker-java
   defaults to a Docker API version below the minimum Docker Engine 29+ enforces, and the
   failure is the misleading "Could not find a valid Docker environment".
@@ -142,12 +150,16 @@ Most of these cost real time on the way in.
   and it is minted both. Different clients getting different scopes needs the IdP above.
 - Senders are `LoggingNotificationSender` stand-ins, one per channel. Nothing is actually
   delivered anywhere yet, and `templateKey` is only logged — there is no rendering.
-- The DLT is proven only for a record that fails to deserialize. A sender that throws takes
-  the retry-topic path, and nothing exercises it yet.
-- The retry topics are created by Spring Kafka on demand (`notification.requested-retry-*`);
-  only the main topic and the DLT are declared as beans.
+- There is no RETRYING state. A failed attempt is recorded as soon as it happens, so an
+  event still working its way through the retry topics reads `FAILED` between tries and only
+  settles when it is SENT or reaches the DLT.
+- The retry topics are created by Spring Kafka on demand and named after the backoff delay
+  (`notification.requested-retry-1000`, `-retry-2000`); only the main topic and the DLT are
+  declared as beans.
 - `DispatchService` calls the sender inside the transaction. Fine for a logging sender;
-  revisit with an ADR when a real provider call arrives.
+  revisit with an ADR when a real provider call arrives. It is also why `DeliveryRecorder`
+  exists and why the listener, not the dispatcher, calls it: a failure recorded inside that
+  transaction rolls back with it.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.
 - No git remote. Portfolio repos are public, so pushing needs an explicit go-ahead and a
