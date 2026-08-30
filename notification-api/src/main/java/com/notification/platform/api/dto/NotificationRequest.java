@@ -14,6 +14,7 @@ import jakarta.validation.constraints.NotNull;
  */
 public record NotificationRequest(
     @NotBlank String recipientId,
+    @NotBlank String destination,
     @NotNull NotificationChannel channel,
     @NotBlank String templateKey,
     Map<String, String> payload) {

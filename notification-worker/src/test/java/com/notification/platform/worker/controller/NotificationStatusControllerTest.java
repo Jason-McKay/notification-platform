@@ -62,8 +62,8 @@ class NotificationStatusControllerTest {
   @Test
   void servesTheStatusToAReadScopedToken() throws Exception {
     Instant at = Instant.parse("2026-08-28T10:15:30Z");
-    Notification notification = new Notification(EVENT_ID, "user-42", NotificationChannel.EMAIL,
-        "order-shipped", Map.of("orderId", "A-1001"), at, at);
+    Notification notification = new Notification(EVENT_ID, "user-42", "jason@example.com",
+        NotificationChannel.EMAIL, "order-shipped", Map.of("orderId", "A-1001"), at, at);
     notification.markSent(at);
 
     when(notifications.findById(EVENT_ID)).thenReturn(Optional.of(notification));

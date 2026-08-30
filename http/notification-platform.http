@@ -7,6 +7,9 @@
 #
 # Note the two hosts: writes go to the api on :8080, the delivery status read is served by
 # the worker on :8081, because the worker owns those tables (docs/adr/0003).
+#
+# EMAIL is delivered over SMTP to the compose stack's mail catcher. Read what arrived at
+# http://localhost:8025 -- the rendered subject and body are the point.
 
 ### Get a bearer token (the api mints it; the worker verifies the same one)
 # @name token
@@ -31,6 +34,7 @@ Content-Type: application/json
 
 {
   "recipientId": "user-42",
+  "destination": "jason@example.com",
   "channel": "EMAIL",
   "templateKey": "order-shipped",
   "payload": {"orderId": "A-1001"}
@@ -51,6 +55,7 @@ Idempotency-Key: demo-key-001
 
 {
   "recipientId": "user-42",
+  "destination": "jason@example.com",
   "channel": "EMAIL",
   "templateKey": "order-shipped",
   "payload": {"orderId": "A-1001"}
@@ -72,6 +77,7 @@ Idempotency-Key: demo-key-001
 
 {
   "recipientId": "user-42",
+  "destination": "jason@example.com",
   "channel": "EMAIL",
   "templateKey": "order-shipped",
   "payload": {"orderId": "A-1001"}
@@ -105,6 +111,7 @@ Authorization: Bearer {{accessToken}}
 
 {
   "recipientId": "user-42",
+  "destination": "+15550100",
   "channel": "SMS",
   "templateKey": "order-delivered",
   "payload": {"orderId": "A-1001"}

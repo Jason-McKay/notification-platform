@@ -14,6 +14,9 @@ import java.util.UUID;
  *
  * @param eventId     unique per accepted request, stable across redeliveries
  * @param recipientId who the notification is for, opaque to this platform
+ * @param destination where to deliver it -- an address, a number, a device token. Separate
+ *                    from recipientId on purpose: that is who, this is where, and the two
+ *                    stop being interchangeable the moment a recipient has two channels
  * @param channel     how to deliver it
  * @param templateKey which template the worker should render
  * @param payload     template variables; never null, may be empty
@@ -22,6 +25,7 @@ import java.util.UUID;
 public record NotificationRequested(
     UUID eventId,
     String recipientId,
+    String destination,
     NotificationChannel channel,
     String templateKey,
     Map<String, String> payload,
@@ -30,6 +34,7 @@ public record NotificationRequested(
   public NotificationRequested {
     Objects.requireNonNull(eventId, "eventId");
     Objects.requireNonNull(recipientId, "recipientId");
+    Objects.requireNonNull(destination, "destination");
     Objects.requireNonNull(channel, "channel");
     Objects.requireNonNull(templateKey, "templateKey");
     Objects.requireNonNull(requestedAt, "requestedAt");

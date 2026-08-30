@@ -10,7 +10,12 @@ import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
+import com.icegreen.greenmail.junit5.GreenMailExtension;
+import com.icegreen.greenmail.util.GreenMailUtil;
+import com.icegreen.greenmail.util.ServerSetupTest;
+import jakarta.mail.internet.MimeMessage;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
@@ -36,8 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.awaitility.Awaitility.await;
 
 /**
- * The test that proves the skeleton walks: an event on a broker becomes a row in a real
- * MySQL, through Flyway's schema and the JPA mapping validated against it.
+ * The test that proves the skeleton walks: an event on a broker becomes an SMTP message and
+ * a row in a real MySQL, through Flyway's schema and the JPA mapping validated against it.
  *
  * <p>MySQL is a container; Kafka is spring-kafka's embedded broker rather than a
  * Testcontainers one. Both Testcontainers Kafka flavours die on this Windows/Docker Desktop
@@ -52,7 +57,12 @@ import static org.awaitility.Awaitility.await;
 @SpringBootTest(properties = {
     "spring.kafka.bootstrap-servers=${spring.embedded.kafka.brokers}",
     // One attempt, so a failing record reaches the DLT without waiting out the backoff.
-    "notification.consumer.attempts=1"
+    "notification.consumer.attempts=1",
+    // GreenMail's conventional test port. The EMAIL sender talks real SMTP now, so the
+    // skeleton needs something listening; 127.0.0.1 rather than localhost because that is
+    // what GreenMail binds and localhost can resolve to ::1 first.
+    "spring.mail.host=127.0.0.1",
+    "spring.mail.port=3025"
 })
 @EmbeddedKafka(topics = {Topics.NOTIFICATION_REQUESTED, Topics.NOTIFICATION_REQUESTED_DLT}, partitions = 1)
 @Testcontainers
@@ -61,6 +71,10 @@ class NotificationDispatchIT {
   @Container
   static final MySQLContainer MYSQL = new MySQLContainer("mysql:8")
       .withDatabaseName("notifications");
+
+  /** The mail server the EMAIL sender delivers to: in this JVM, no container needed. */
+  @RegisterExtension
+  static final GreenMailExtension SMTP = new GreenMailExtension(ServerSetupTest.SMTP);
 
   @DynamicPropertySource
   static void properties(DynamicPropertyRegistry registry) {
@@ -82,7 +96,7 @@ class NotificationDispatchIT {
   private EmbeddedKafkaBroker broker;
 
   @Test
-  void deliversAnEventAndRecordsTheAttempt() {
+  void deliversAnEventAndRecordsTheAttempt() throws Exception {
     NotificationRequested event = event(UUID.randomUUID());
 
     kafkaTemplate.send(Topics.NOTIFICATION_REQUESTED, event.partitionKey(), event);
@@ -99,6 +113,13 @@ class NotificationDispatchIT {
     assertThat(attempts.findByEventIdOrderByAttemptedAtAsc(event.eventId()))
         .singleElement()
         .satisfies(attempt -> assertThat(attempt.getStatus()).isEqualTo(DeliveryStatus.SENT));
+
+    // And the message itself left the building, rendered from the configured template.
+    assertThat(SMTP.waitForIncomingEmail(1)).isTrue();
+    MimeMessage delivered = SMTP.getReceivedMessages()[0];
+    assertThat(delivered.getAllRecipients()[0]).hasToString("jason@example.com");
+    assertThat(delivered.getSubject()).isEqualTo("Your order A-1001 has shipped");
+    assertThat(GreenMailUtil.getBody(delivered)).contains("Order A-1001 is on its way.");
   }
 
   @Test
@@ -143,7 +164,8 @@ class NotificationDispatchIT {
   }
 
   private static NotificationRequested event(UUID eventId) {
-    return new NotificationRequested(eventId, "user-42", NotificationChannel.EMAIL,
-        "order-shipped", Map.of("orderId", "A-1001"), Instant.parse("2026-08-27T21:30:00Z"));
+    return new NotificationRequested(eventId, "user-42", "jason@example.com",
+        NotificationChannel.EMAIL, "order-shipped", Map.of("orderId", "A-1001"),
+        Instant.parse("2026-08-27T21:30:00Z"));
   }
 }

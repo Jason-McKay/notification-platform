@@ -53,6 +53,13 @@
             <artifactId>flyway-mysql</artifactId>
         </dependency>
 
+        <!-- The EMAIL channel talks SMTP. Boot 4 keeps mail autoconfiguration in its own
+             module like every other technology, so this is the starter, not jakarta.mail. -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-mail</artifactId>
+        </dependency>
+
         <!-- Web only for the status read; this application is a consumer first. -->
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -93,6 +100,14 @@
         <dependency>
             <groupId>org.springframework.kafka</groupId>
             <artifactId>spring-kafka-test</artifactId>
+            <scope>test</scope>
+        </dependency>
+        <!-- An SMTP server in the JVM, so the email sender is tested against a real protocol
+             without a container. spring-boot-starter-mail-test is only mail + starter-test:
+             it ships no server, which is why this is here instead. -->
+        <dependency>
+            <groupId>com.icegreen</groupId>
+            <artifactId>greenmail-junit5</artifactId>
             <scope>test</scope>
         </dependency>
         <dependency>

@@ -85,6 +85,11 @@ because the ITs are what cover the wiring between the two deployables.
   they still have to be listed in `@EmbeddedKafka`: `consumeFromEmbeddedTopics` validates
   against that list rather than against the broker, and rejects a topic that does exist with
   "not in embedded topic list".
+- `EmailNotificationSenderTest` runs against GreenMail, an SMTP server inside the test JVM,
+  so the one sender that speaks a real protocol is covered by a plain unit test with no
+  container. `NotificationDispatchIT` uses the same server on GreenMail's conventional port
+  3025, bound with `spring.mail.host=127.0.0.1` rather than localhost, which can resolve to
+  ::1 first and refuse the connection.
 - Keep the surefire/failsafe `-Dapi.version=1.44` argLine in the root pom. docker-java
   defaults to a Docker API version below the minimum Docker Engine 29+ enforces, and the
   failure is the misleading "Could not find a valid Docker environment".
@@ -134,8 +139,13 @@ Most of these cost real time on the way in.
 - **Port and container collisions.** The shared `infrastructure` stack holds `dev-redis`
   :6379, `dev-mysql` :3306 and `dev-artemis`; this repo's `compose.yaml` is self-contained
   and uses `np-` container names on shifted host ports (Redis 6380, MySQL 3307, Kafka
-  19092) so both can run at once. The api on :8080 still collides with message-inspector —
+  19092) so both can run at once. Mailpit is the exception, on its own defaults: SMTP 1025
+  and the inbox at http://localhost:8025. The api on :8080 still collides with message-inspector —
   run one at a time.
+- **`spring-boot-starter-mail-test` ships no mail server.** Despite the name it is only
+  `spring-boot-starter-mail` plus `spring-boot-starter-test`, so the SMTP server the tests
+  need is GreenMail, pinned in the root pom (the Boot BOM does not manage it). It must be
+  the 2.x line: 1.x is built against `javax.mail` and Boot 4 is jakarta throughout.
 - **Template placeholders are `{{name}}`, not `${name}`.** The templates live in
   `application.properties`, and Spring resolves `${...}` itself while binding: a variable
   spelled that way is an unresolvable placeholder and the worker will not start.
@@ -151,8 +161,12 @@ Most of these cost real time on the way in.
   POST and `notifications.read` the worker's GET (`Scopes` in `notification-common`, so the
   minting side and the two verifying sides cannot drift), but there is one client credential
   and it is minted both. Different clients getting different scopes needs the IdP above.
-- Senders are `LoggingNotificationSender` stand-ins, one per channel. The copy is rendered
-  for real and handed to them; nothing is actually delivered anywhere yet.
+- EMAIL is real and talks SMTP; SMS and PUSH are still `LoggingNotificationSender`
+  stand-ins. Swapping one of those for a provider is a bean in `SenderConfig` and nothing
+  else.
+- Email is plain text, one subject and one body. No HTML, no multipart, no attachments.
+- Nothing validates the shape of `destination`. A malformed address is a provider
+  rejection like any other: recorded on the attempt, retried, dead-lettered.
 - Templates are configuration (`notification.templates.*`), not a store, so changing copy is
   a redeploy. `TemplateRenderer` takes them as a map, so a store would not reach it.
 - The api accepts any `templateKey`: it owns no templates, so an unknown key is a 202
@@ -164,10 +178,16 @@ Most of these cost real time on the way in.
 - The retry topics are created by Spring Kafka on demand and named after the backoff delay
   (`notification.requested-retry-1000`, `-retry-2000`); only the main topic and the DLT are
   declared as beans.
-- `DispatchService` calls the sender inside the transaction. Fine for a logging sender;
-  revisit with an ADR when a real provider call arrives. It is also why `DeliveryRecorder`
-  exists and why the listener, not the dispatcher, calls it: a failure recorded inside that
-  transaction rolls back with it.
+- A crash between the send and the SENT record leaves the row PENDING with the message
+  already delivered, and the retry sends it again (ADR 0004). At-least-once, deliberately.
+- **The main topic can be auto-created with one partition.** Only the api declares
+  `notification.requested` (3 partitions, `KafkaTopicConfig`). If the worker's consumer
+  reaches the broker first, auto-creation gives the topic the broker default of one
+  partition; the api then widens it to three, but a consumer that has already cached the
+  one-partition metadata keeps consuming partition 0 alone until `metadata.max.age.ms`
+  (5 minutes) expires. Events keyed onto the other partitions just sit there. Seen on a
+  compose run on 2026-08-30, where the worker started first. Restarting the worker clears
+  it; declaring the topic in both applications would prevent it.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.
 - No git remote. Portfolio repos are public, so pushing needs an explicit go-ahead and a

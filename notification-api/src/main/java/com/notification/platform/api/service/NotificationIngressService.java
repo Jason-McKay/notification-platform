@@ -62,6 +62,7 @@ public class NotificationIngressService {
     publisher.publish(new NotificationRequested(
         eventId,
         request.recipientId(),
+        request.destination(),
         request.channel(),
         request.templateKey(),
         request.payload(),

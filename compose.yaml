@@ -3,7 +3,8 @@
 #   docker compose up --build
 #
 # Brings up both applications (built from their module Dockerfiles) with their own Kafka,
-# Redis and MySQL. The api is on http://localhost:8080 (Swagger at
+# Redis, MySQL and a catch-all SMTP server. Mail the worker sends is readable at
+# http://localhost:8025 -- nothing leaves the machine. The api is on http://localhost:8080 (Swagger at
 # http://localhost:8080/api/swagger-ui.html) and the worker's status read on
 # http://localhost:8081.
 #
@@ -96,6 +97,21 @@ services:
     ports:
       - "8080:8080"
 
+  # Catch-all SMTP for the EMAIL channel: it accepts everything and delivers nothing,
+  # with a web inbox on http://localhost:8025 to read what the worker sent. Mailpit rather
+  # than the better-known MailHog, whose upstream is archived.
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: np-mailpit
+    ports:
+      - "1025:1025"   # SMTP
+      - "8025:8025"   # web inbox
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   worker:
     build:
       context: .
@@ -106,9 +122,12 @@ services:
         condition: service_healthy
       mysql:
         condition: service_healthy
+      mailpit:
+        condition: service_healthy
     environment:
       SPRING_KAFKA_BOOTSTRAP_SERVERS: np-kafka:9092
       SPRING_DATASOURCE_URL: jdbc:mysql://np-mysql:3306/notifications
+      SPRING_MAIL_HOST: np-mailpit
       NOTIFICATION_JWT_SECRET: dev-only-secret-please-override-me-0123456789
     ports:
       - "8081:8081"

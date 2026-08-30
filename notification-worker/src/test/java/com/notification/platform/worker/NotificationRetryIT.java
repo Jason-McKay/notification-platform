@@ -163,7 +163,8 @@ class NotificationRetryIT {
   }
 
   private static NotificationRequested event(UUID eventId) {
-    return new NotificationRequested(eventId, "user-42", NotificationChannel.SMS,
-        "order-shipped", Map.of("orderId", "A-1001"), Instant.parse("2026-08-27T21:30:00Z"));
+    return new NotificationRequested(eventId, "user-42", "+15550100",
+        NotificationChannel.SMS, "order-shipped", Map.of("orderId", "A-1001"),
+        Instant.parse("2026-08-27T21:30:00Z"));
   }
 }

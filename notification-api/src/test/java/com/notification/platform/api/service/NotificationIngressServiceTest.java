@@ -60,7 +60,8 @@ class NotificationIngressServiceTest {
   @BeforeEach
   void setUp() {
     request = new NotificationRequest(
-        "user-42", NotificationChannel.EMAIL, "order-shipped", Map.of("orderId", "A-1001"));
+        "user-42", "jason@example.com", NotificationChannel.EMAIL, "order-shipped",
+        Map.of("orderId", "A-1001"));
   }
 
   @Test

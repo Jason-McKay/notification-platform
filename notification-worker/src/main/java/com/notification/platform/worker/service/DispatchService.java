@@ -1,79 +1,61 @@
 package com.notification.platform.worker.service;
 
-import java.time.Clock;
-import java.time.Instant;
 import java.util.EnumMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 import com.notification.platform.common.event.NotificationChannel;
 import com.notification.platform.common.event.NotificationRequested;
 import com.notification.platform.worker.channel.NotificationSender;
-import com.notification.platform.worker.domain.DeliveryAttempt;
-import com.notification.platform.worker.domain.DeliveryStatus;
 import com.notification.platform.worker.domain.Notification;
-import com.notification.platform.worker.repository.DeliveryAttemptRepository;
-import com.notification.platform.worker.repository.NotificationRepository;
 import com.notification.platform.worker.template.RenderedMessage;
 import com.notification.platform.worker.template.TemplateRenderer;
 
 import lombok.extern.slf4j.Slf4j;
 
-/** Records the notification, hands it to the right sender, and records what happened. */
+/** Claims the delivery record, renders the copy, sends it, and records the result. */
 @Service
 @Slf4j
 public class DispatchService {
 
-  private final NotificationRepository notifications;
-  private final DeliveryAttemptRepository attempts;
   private final Map<NotificationChannel, NotificationSender> senders;
+  private final DeliveryRecorder records;
   private final TemplateRenderer templates;
-  private final Clock clock;
 
-  public DispatchService(NotificationRepository notifications, DeliveryAttemptRepository attempts,
-      List<NotificationSender> senders, TemplateRenderer templates, Clock clock) {
-    this.notifications = notifications;
-    this.attempts = attempts;
+  public DispatchService(List<NotificationSender> senders, DeliveryRecorder records,
+      TemplateRenderer templates) {
     this.senders = new EnumMap<>(NotificationChannel.class);
     senders.forEach(sender -> this.senders.put(sender.channel(), sender));
+    this.records = records;
     this.templates = templates;
-    this.clock = clock;
   }
 
   /**
    * Dispatch one event.
    *
-   * <p>Transactional with the send inside it on purpose: at this size, a sender that throws
-   * should roll the half-written record back and let the retry topic bring the event round
-   * again, rather than leave a PENDING row nothing will ever revisit. A real provider call
-   * would be moved out of the transaction and reconciled instead -- worth an ADR when that
-   * day comes.
+   * <p>Deliberately <em>not</em> transactional -- see ADR 0004,
+   * {@code docs/adr/0004-the-provider-call-leaves-the-transaction.md}. The claim commits,
+   * the provider call happens with no transaction open, and the result is recorded in a
+   * second one. A sender that takes ten seconds to time out is then
+   * ten seconds of nothing, rather than ten seconds of a held row lock.
    *
-   * <p>Nothing here writes the failure down, and that is the consequence of the rollback:
-   * anything this method records about a failed attempt unwinds with it. {@link
-   * DeliveryRecorder}, called by the listener once this transaction is over, is what leaves
-   * the trace.
+   * <p>The window that buys is real and deliberate: a crash between the send and the record
+   * leaves the row PENDING with the message already delivered, and the retry delivers it
+   * again. At-least-once, stated rather than hidden.
    *
-   * <p>Redelivery is expected, not exceptional: Kafka guarantees at-least-once, so this
-   * checks for an existing SENT record before doing anything.
+   * <p>Failures need nothing here. Anything thrown reaches the listener, which records the
+   * attempt and lets the retry topics carry the event to the dead-letter topic.
    */
-  @Transactional
   public void dispatch(NotificationRequested event) {
-    Instant now = Instant.now(clock);
-
-    Optional<Notification> existing = notifications.findById(event.eventId());
-    if (existing.isPresent() && existing.get().getStatus() == DeliveryStatus.SENT) {
+    Optional<Notification> claimed = records.claim(event);
+    if (claimed.isEmpty()) {
       log.debug("event {} already sent, ignoring redelivery", event.eventId());
       return;
     }
-
-    Notification notification = existing.orElseGet(() -> notifications.save(new Notification(
-        event.eventId(), event.recipientId(), event.channel(), event.templateKey(),
-        event.payload(), event.requestedAt(), now)));
+    Notification notification = claimed.get();
 
     NotificationSender sender = senders.get(event.channel());
     if (sender == null) {
@@ -83,14 +65,11 @@ public class DispatchService {
       throw new IllegalStateException("no sender registered for channel " + event.channel());
     }
 
-    // Rendered before the send and inside the transaction: it is a pure function, and a
-    // template that cannot be rendered is a failed delivery like any other -- recorded on
-    // the attempt, retried, then parked on the DLT.
     RenderedMessage message =
         templates.render(notification.getTemplateKey(), notification.getPayload());
 
     sender.send(notification, message);
-    notification.markSent(now);
-    attempts.save(new DeliveryAttempt(event.eventId(), DeliveryStatus.SENT, null, now));
+
+    records.recordSent(event.eventId());
   }
 }

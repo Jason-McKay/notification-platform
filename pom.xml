@@ -36,6 +36,9 @@
         <java.version>21</java.version>
         <!-- Testcontainers is version-managed by the Boot parent; nothing pinned here on
              purpose, so a parent bump carries it. -->
+        <!-- GreenMail is not in the Boot BOM, so this one is pinned. It has to be the 2.x
+             line: 1.x is built against javax.mail and Boot 4 is jakarta throughout. -->
+        <greenmail.version>2.1.13</greenmail.version>
     </properties>
 
     <dependencyManagement>
@@ -46,6 +49,12 @@
                 <groupId>com.notification.platform</groupId>
                 <artifactId>notification-common</artifactId>
                 <version>${project.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>com.icegreen</groupId>
+                <artifactId>greenmail-junit5</artifactId>
+                <version>${greenmail.version}</version>
+                <scope>test</scope>
             </dependency>
         </dependencies>
     </dependencyManagement>

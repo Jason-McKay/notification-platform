@@ -39,6 +39,10 @@ public class Notification {
   @Column(name = "recipient_id", nullable = false)
   private String recipientId;
 
+  /** Where it goes, as opposed to who it is for. Set by the caller, opaque to the worker. */
+  @Column(name = "destination", nullable = false)
+  private String destination;
+
   @Enumerated(EnumType.STRING)
   @Column(name = "channel", nullable = false)
   private NotificationChannel channel;
@@ -60,10 +64,12 @@ public class Notification {
   @Column(name = "updated_at", nullable = false)
   private Instant updatedAt;
 
-  public Notification(UUID eventId, String recipientId, NotificationChannel channel,
-      String templateKey, Map<String, String> payload, Instant requestedAt, Instant updatedAt) {
+  public Notification(UUID eventId, String recipientId, String destination,
+      NotificationChannel channel, String templateKey, Map<String, String> payload,
+      Instant requestedAt, Instant updatedAt) {
     this.eventId = eventId;
     this.recipientId = recipientId;
+    this.destination = destination;
     this.channel = channel;
     this.templateKey = templateKey;
     this.payload = payload;

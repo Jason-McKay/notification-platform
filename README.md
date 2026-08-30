@@ -31,11 +31,15 @@ TOKEN=$(curl -s -X POST localhost:8080/api/auth/token -H 'Content-Type: applicat
 curl -s -X POST localhost:8080/api/notifications \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
   -H 'Idempotency-Key: demo-1' \
-  -d '{"recipientId":"user-42","channel":"EMAIL","templateKey":"order-shipped","payload":{"orderId":"A-1001"}}'
+  -d '{"recipientId":"user-42","destination":"jason@example.com","channel":"EMAIL",
+       "templateKey":"order-shipped","payload":{"orderId":"A-1001"}}'
 
 # the id comes back from the POST; the status read is on the worker, not the api
 curl -s localhost:8081/api/notifications/<eventId> -H "Authorization: Bearer $TOKEN"
 ```
+
+The EMAIL channel really sends: the compose stack runs a mail catcher, and the rendered
+message is waiting at http://localhost:8025.
 
 That token carries both scopes the platform enforces: `notifications.write` for the write on
 the api, `notifications.read` for the status read on the worker. A token that authenticates

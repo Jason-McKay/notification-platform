@@ -51,8 +51,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 class NotificationIngressIT {
 
   private static final String BODY = """
-      {"recipientId":"user-42","channel":"EMAIL","templateKey":"order-shipped",
-       "payload":{"orderId":"A-1001"}}
+      {"recipientId":"user-42","destination":"jason@example.com","channel":"EMAIL",
+       "templateKey":"order-shipped","payload":{"orderId":"A-1001"}}
       """;
 
   @Container

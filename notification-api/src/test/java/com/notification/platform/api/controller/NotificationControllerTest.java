@@ -37,8 +37,8 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 class NotificationControllerTest {
 
   private static final String VALID_BODY = """
-      {"recipientId":"user-42","channel":"EMAIL","templateKey":"order-shipped",
-       "payload":{"orderId":"A-1001"}}
+      {"recipientId":"user-42","destination":"jason@example.com","channel":"EMAIL",
+       "templateKey":"order-shipped","payload":{"orderId":"A-1001"}}
       """;
 
   @Autowired
@@ -103,7 +103,7 @@ class NotificationControllerTest {
     mockMvc.perform(post("/api/notifications").with(tokenWith(Scopes.WRITE_AUTHORITY))
             .contentType(MediaType.APPLICATION_JSON)
             .content("""
-                {"recipientId":"","channel":"EMAIL","templateKey":"order-shipped"}
+                {"recipientId":"","destination":"jason@example.com","channel":"EMAIL","templateKey":"order-shipped"}
                 """))
         .andExpect(status().isBadRequest());
   }

@@ -25,6 +25,7 @@ class NotificationRequestedTest {
     NotificationRequested event = new NotificationRequested(
         UUID.fromString("0f6bd3fc-6c1e-4f3e-9a1b-2b6f5a7c8d90"),
         "user-42",
+        "jason@example.com",
         NotificationChannel.EMAIL,
         "order-shipped",
         Map.of("orderId", "A-1001"),
@@ -35,6 +36,7 @@ class NotificationRequestedTest {
     assertThat(json)
         .contains("\"eventId\":\"0f6bd3fc-6c1e-4f3e-9a1b-2b6f5a7c8d90\"")
         .contains("\"recipientId\":\"user-42\"")
+        .contains("\"destination\":\"jason@example.com\"")
         .contains("\"channel\":\"EMAIL\"")
         .contains("\"templateKey\":\"order-shipped\"")
         .contains("\"orderId\":\"A-1001\"");
@@ -54,9 +56,16 @@ class NotificationRequestedTest {
   @Test
   void rejectsMissingRequiredFields() {
     assertThatThrownBy(() -> new NotificationRequested(
-        null, "user-42", NotificationChannel.SMS, "order-shipped", Map.of(), Instant.now()))
+        null, "user-42", "+15550100", NotificationChannel.SMS, "order-shipped", Map.of(),
+        Instant.now()))
         .isInstanceOf(NullPointerException.class)
         .hasMessage("eventId");
+
+    assertThatThrownBy(() -> new NotificationRequested(
+        UUID.randomUUID(), "user-42", null, NotificationChannel.SMS, "order-shipped", Map.of(),
+        Instant.now()))
+        .isInstanceOf(NullPointerException.class)
+        .hasMessage("destination");
   }
 
   @Test
@@ -66,7 +75,7 @@ class NotificationRequestedTest {
 
   private static NotificationRequested event(Map<String, String> payload) {
     return new NotificationRequested(
-        UUID.randomUUID(), "user-42", NotificationChannel.EMAIL, "order-shipped",
-        payload, Instant.parse("2026-08-27T21:30:00Z"));
+        UUID.randomUUID(), "user-42", "jason@example.com", NotificationChannel.EMAIL,
+        "order-shipped", payload, Instant.parse("2026-08-27T21:30:00Z"));
   }
 }
