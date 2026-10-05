@@ -64,7 +64,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 // Spelled out rather than built from the constants below because an annotation cannot
 // reference the fields of the class it sits on.
 @EmbeddedKafka(topics = {Topics.NOTIFICATION_REQUESTED, "notification.requested-retry-1000",
-    "notification.requested-retry-2000", Topics.NOTIFICATION_REQUESTED_DLT}, partitions = 1)
+    "notification.requested-retry-2000", Topics.NOTIFICATION_REQUESTED_DLT}, partitions = 3)
 @Testcontainers
 class NotificationRetryIT {
 

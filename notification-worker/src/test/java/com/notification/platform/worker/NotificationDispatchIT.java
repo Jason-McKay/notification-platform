@@ -64,7 +64,7 @@ import static org.awaitility.Awaitility.await;
     "spring.mail.host=127.0.0.1",
     "spring.mail.port=3025"
 })
-@EmbeddedKafka(topics = {Topics.NOTIFICATION_REQUESTED, Topics.NOTIFICATION_REQUESTED_DLT}, partitions = 1)
+@EmbeddedKafka(topics = {Topics.NOTIFICATION_REQUESTED, Topics.NOTIFICATION_REQUESTED_DLT}, partitions = 3)
 @Testcontainers
 class NotificationDispatchIT {
 

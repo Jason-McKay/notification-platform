@@ -180,14 +180,18 @@ Most of these cost real time on the way in.
   declared as beans.
 - A crash between the send and the SENT record leaves the row PENDING with the message
   already delivered, and the retry sends it again (ADR 0004). At-least-once, deliberately.
-- **The main topic can be auto-created with one partition.** Only the api declares
-  `notification.requested` (3 partitions, `KafkaTopicConfig`). If the worker's consumer
-  reaches the broker first, auto-creation gives the topic the broker default of one
-  partition; the api then widens it to three, but a consumer that has already cached the
-  one-partition metadata keeps consuming partition 0 alone until `metadata.max.age.ms`
-  (5 minutes) expires. Events keyed onto the other partitions just sit there. Seen on a
-  compose run on 2026-08-30, where the worker started first. Restarting the worker clears
-  it; declaring the topic in both applications would prevent it.
+- **The main-topic partition race is closed (2026-10-04).** `notification.requested`
+  (3 partitions) is now declared as a `NewTopic` bean in *both* applications
+  (`KafkaTopicConfig` in the api and in the worker), so whichever boots first creates it with
+  the full partition count and neither side relies on broker auto-creation. Before this, only
+  the api declared it: a worker whose consumer reached the broker first cached the
+  one-partition auto-created topic and kept consuming partition 0 alone until
+  `metadata.max.age.ms` (5 minutes) expired, stranding events keyed onto the other partitions
+  (seen on a compose run on 2026-08-30). The worker ITs run `@EmbeddedKafka` at 3 partitions
+  to match. **The DLT is still declared only by the api**, so the same race remains possible
+  for `notification.requested-dlt` in principle; it is a narrower window (the DLT is not on
+  the consume path and is created by the worker's `@RetryableTopic` machinery), left as a
+  residual gap.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.
 - No git remote. Portfolio repos are public, so pushing needs an explicit go-ahead and a
