@@ -11,14 +11,13 @@ Spring Boot 4.1 / Java 21, Maven multi-module.
 It is deliberately a *platform*, not a service: it ships **two deployables**, which is the
 point of the project (portfolio project #2 — microservices + event-driven).
 
-Roadmap: `C:\Users\jason\Claude\plans\notification-platform-plan.md` — current status, the
+Roadmap: a local planning doc kept outside the repo — current status, the
 ordered next actions, and what is deliberately deferred. **Read it before starting
-non-trivial work.** It is kept out of this repo on purpose: the repo is headed for a public
-remote.
+non-trivial work.** It is kept out of this repo on purpose: the repo is public.
 
-Related repos: `C:\Users\jason\Projects\message-inspector\` (JMS/Artemis tooling; most of
-the conventions here come from it), `C:\Users\jason\Projects\life-api\` (the other Boot 4
-project), `C:\Users\jason\Projects\infrastructure\` (shared dev stack — **not** used by
+Related repos: `message-inspector` (JMS/Artemis tooling; most of
+the conventions here come from it), `life-api` (the other Boot 4
+project), `infrastructure` (shared dev stack — **not** used by
 this repo, see Gotchas).
 
 ## Modules
