@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -126,9 +127,14 @@ class NotificationRetryIT {
   @Autowired
   private EmbeddedKafkaBroker broker;
 
+  @Autowired
+  private MeterRegistry meters;
+
   @Test
   void aSenderThatThrowsIsRetriedThenDeadLettered() {
     NotificationRequested event = event(UUID.randomUUID());
+    double failedBefore = smsDeliveries("failed");
+    double parkedBefore = smsDeliveries("dead_lettered");
 
     Map<String, Object> props =
         KafkaTestUtils.consumerProps(broker.getBrokersAsString(), "retry-it", "true");
@@ -174,6 +180,21 @@ class NotificationRetryIT {
             tuple(DeliveryStatus.FAILED, "sms provider is down"),
             tuple(DeliveryStatus.FAILED, "sms provider is down"),
             tuple(DeliveryStatus.DEAD_LETTERED, "parked on " + Topics.NOTIFICATION_REQUESTED_DLT));
+
+    // The metrics tell the same story: every failed try, then the parking once. Awaited,
+    // because the counter moves just after the commit the row assertion above saw.
+    await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+      assertThat(smsDeliveries("failed") - failedBefore).isEqualTo(3.0);
+      assertThat(smsDeliveries("dead_lettered") - parkedBefore).isEqualTo(1.0);
+    });
+  }
+
+  private double smsDeliveries(String outcome) {
+    return meters.get("notification.delivery")
+        .tag("channel", "SMS")
+        .tag("outcome", outcome)
+        .counter()
+        .count();
   }
 
   private static NotificationRequested event(UUID eventId) {

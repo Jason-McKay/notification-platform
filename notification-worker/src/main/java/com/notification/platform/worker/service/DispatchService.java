@@ -11,6 +11,7 @@ import com.notification.platform.common.event.NotificationChannel;
 import com.notification.platform.common.event.NotificationRequested;
 import com.notification.platform.worker.channel.NotificationSender;
 import com.notification.platform.worker.domain.Notification;
+import com.notification.platform.worker.metrics.DeliveryMetrics;
 import com.notification.platform.worker.template.RenderedMessage;
 import com.notification.platform.worker.template.TemplateRenderer;
 
@@ -24,13 +25,15 @@ public class DispatchService {
   private final Map<NotificationChannel, NotificationSender> senders;
   private final DeliveryRecorder records;
   private final TemplateRenderer templates;
+  private final DeliveryMetrics metrics;
 
   public DispatchService(List<NotificationSender> senders, DeliveryRecorder records,
-      TemplateRenderer templates) {
+      TemplateRenderer templates, DeliveryMetrics metrics) {
     this.senders = new EnumMap<>(NotificationChannel.class);
     senders.forEach(sender -> this.senders.put(sender.channel(), sender));
     this.records = records;
     this.templates = templates;
+    this.metrics = metrics;
   }
 
   /**
@@ -71,5 +74,6 @@ public class DispatchService {
     sender.send(notification, message);
 
     records.recordSent(event.eventId());
+    metrics.sent(event.channel());
   }
 }

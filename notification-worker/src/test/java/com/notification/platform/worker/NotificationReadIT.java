@@ -17,6 +17,7 @@ import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.test.web.servlet.ResultActions;
+import org.springframework.test.web.servlet.request.RequestPostProcessor;
 import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 import org.testcontainers.mysql.MySQLContainer;
@@ -31,14 +32,18 @@ import com.notification.platform.worker.repository.DeliveryAttemptRepository;
 import com.notification.platform.worker.repository.NotificationRepository;
 
 import static org.hamcrest.Matchers.contains;
+import static org.hamcrest.Matchers.containsString;
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.jwt;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 /**
  * The delivery list and stats against the real schema: the JPQL filters, the sort, the
  * paging and the grouped counts are all things a mocked repository cannot get wrong.
+ * Likewise the Prometheus endpoint's scope, which needs the real actuator wiring behind
+ * the real chain.
  *
  * <p>The rows are seeded through the repositories rather than sent through the broker, so
  * each one can be given the status and the update time the assertion needs. Kafka is still
@@ -156,10 +161,26 @@ class NotificationReadIT {
         .andExpect(jsonPath("$.byChannel.PUSH").value(0));
   }
 
+  @Test
+  void prometheusTakesTheReadScope() throws Exception {
+    mockMvc.perform(get("/actuator/prometheus"))
+        .andExpect(status().isUnauthorized());
+    mockMvc.perform(get("/actuator/prometheus").with(tokenWith(Scopes.WRITE_AUTHORITY)))
+        .andExpect(status().isForbidden());
+
+    // Registered up front, so both series are there before a single event has been seen.
+    read("/actuator/prometheus")
+        .andExpect(content().string(containsString("notification_delivery_total")))
+        .andExpect(content().string(containsString("notification_dispatch_duration_seconds")));
+  }
+
   private ResultActions read(String uri) throws Exception {
-    return mockMvc.perform(get(uri)
-            .with(jwt().authorities(new SimpleGrantedAuthority(Scopes.READ_AUTHORITY))))
+    return mockMvc.perform(get(uri).with(tokenWith(Scopes.READ_AUTHORITY)))
         .andExpect(status().isOk());
+  }
+
+  private static RequestPostProcessor tokenWith(String authority) {
+    return jwt().authorities(new SimpleGrantedAuthority(authority));
   }
 
   private UUID seed(String recipientId, NotificationChannel channel, DeliveryStatus status,

@@ -12,6 +12,7 @@ import org.springframework.stereotype.Component;
 
 import com.notification.platform.common.event.NotificationRequested;
 import com.notification.platform.common.event.Topics;
+import com.notification.platform.worker.metrics.DeliveryMetrics;
 import com.notification.platform.worker.service.DeliveryRecorder;
 import com.notification.platform.worker.service.DispatchService;
 
@@ -34,6 +35,7 @@ public class NotificationRequestedListener {
 
   private final DispatchService dispatchService;
   private final DeliveryRecorder recorder;
+  private final DeliveryMetrics metrics;
 
   /**
    * The same property {@code @RetryableTopic} reads, so a failed try can tell whether the
@@ -54,7 +56,7 @@ public class NotificationRequestedListener {
       @Header(name = RetryTopicHeaders.DEFAULT_HEADER_ATTEMPTS, required = false) Integer attempt) {
     log.debug("consumed event {} for recipient {}", event.eventId(), event.recipientId());
     try {
-      dispatchService.dispatch(event);
+      metrics.timeDispatch(event.channel(), () -> dispatchService.dispatch(event));
     } catch (RuntimeException e) {
       // Recorded here rather than in the dispatcher because every failure surfaces here --
       // the claim, the render, a missing sender and the send itself -- and because only the
@@ -62,6 +64,7 @@ public class NotificationRequestedListener {
       log.warn("delivery of event {} failed: {}", event.eventId(), e.toString());
       boolean retriesRemaining = (attempt == null ? 1 : attempt) < maxAttempts;
       recorder.recordFailedAttempt(event, e, retriesRemaining);
+      metrics.failed(event.channel());
       // Rethrown on purpose: the retry topics and the DLT are driven by the exception
       // escaping this method, so swallowing it here would silently drop the event.
       throw e;
@@ -79,6 +82,10 @@ public class NotificationRequestedListener {
   @DltHandler
   public void onDeadLettered(NotificationRequested event) {
     log.warn("event {} parked on {}", event.eventId(), Topics.NOTIFICATION_REQUESTED_DLT);
-    recorder.recordDeadLettered(event);
+    // A redelivered DLT record, or one for an event that was sent after all, changes nothing
+    // and so counts nothing.
+    if (recorder.recordDeadLettered(event)) {
+      metrics.deadLettered(event.channel());
+    }
   }
 }
