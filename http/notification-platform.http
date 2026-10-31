@@ -5,7 +5,7 @@
 #
 #   docker compose up --build
 #
-# Note the two hosts: writes go to the api on :8080, the delivery status read is served by
+# Note the two hosts: writes go to the api on :8080, the delivery reads are served by
 # the worker on :8081, because the worker owns those tables (docs/adr/0003).
 #
 # EMAIL is delivered over SMTP to the compose stack's mail catcher. Read what arrived at
@@ -124,5 +124,96 @@ Authorization: Bearer {{accessToken}}
 > {%
     client.test("404 for an unknown id", function() {
         client.assert(response.status === 404, "expected 404");
+    });
+%}
+
+### A notification that cannot be delivered: the worker has no such template
+# The api owns no templates, so it accepts this; the worker fails to render it on every try.
+POST {{apiHost}}/api/notifications
+Content-Type: application/json
+Authorization: Bearer {{accessToken}}
+
+{
+  "recipientId": "user-42",
+  "destination": "jason@example.com",
+  "channel": "EMAIL",
+  "templateKey": "no-such-template",
+  "payload": {"orderId": "A-1002"}
+}
+
+> {%
+    client.global.set("failedEventId", response.body.eventId);
+    client.test("accepted anyway", function() {
+        client.assert(response.status === 202, "expected 202");
+    });
+%}
+
+### Its delivery record, once parked (give it about five seconds: three tries, 1s then 2s apart)
+# RETRYING while the retry topics still hold a try, then DEAD_LETTERED for good.
+GET {{workerHost}}/api/notifications/{{failedEventId}}
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("dead-lettered", function() {
+        client.assert(response.status === 200, "expected 200");
+        client.assert(response.body.status === "DEAD_LETTERED",
+            "expected DEAD_LETTERED, got " + response.body.status);
+        // Three failed tries, then the marker that it was parked.
+        client.assert(response.body.attempts.length === 4, "expected four attempt rows");
+    });
+%}
+
+### The delivery list: newest first by last update, 20 to a page, no payload
+GET {{workerHost}}/api/notifications
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("a page", function() {
+        client.assert(response.status === 200, "expected 200");
+        client.assert(response.body.page === 0, "pages are 0-based");
+        client.assert(response.body.items[0].payload === undefined, "the list never carries the payload");
+    });
+%}
+
+### Only what was parked
+GET {{workerHost}}/api/notifications?status=DEAD_LETTERED
+Authorization: Bearer {{accessToken}}
+
+### One recipient on one channel
+GET {{workerHost}}/api/notifications?channel=EMAIL&recipientId=user-42
+Authorization: Bearer {{accessToken}}
+
+### A page size above 100 is capped, not refused
+GET {{workerHost}}/api/notifications?size=500
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("capped at 100", function() {
+        client.assert(response.status === 200, "expected 200");
+        client.assert(response.body.size === 100, "expected size 100, got " + response.body.size);
+    });
+%}
+
+### Counts by status and channel over the last 24 hours, zeros included
+GET {{workerHost}}/api/notifications/stats
+Authorization: Bearer {{accessToken}}
+
+> {%
+    client.test("every status present", function() {
+        client.assert(response.status === 200, "expected 200");
+        client.assert(response.body.byStatus.RETRYING !== undefined, "zeros are listed, not omitted");
+    });
+%}
+
+### Delivery counters by outcome (tags: channel, outcome)
+GET {{workerHost}}/actuator/metrics/notification.delivery
+Authorization: Bearer {{accessToken}}
+
+### The Prometheus scrape takes the read scope like every other read -- 401 without a token
+GET {{workerHost}}/actuator/prometheus
+
+> {%
+    client.test("401 without a token", function() {
+        client.assert(response.status === 401, "expected 401, got " + response.status);
     });
 %}
