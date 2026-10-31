@@ -9,6 +9,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import com.notification.platform.common.event.NotificationRequested;
+import com.notification.platform.common.event.Topics;
 import com.notification.platform.worker.domain.DeliveryAttempt;
 import com.notification.platform.worker.domain.DeliveryStatus;
 import com.notification.platform.worker.domain.Notification;
@@ -36,6 +37,9 @@ public class DeliveryRecorder {
 
   /** The detail column, so a long provider message cannot fail the insert. */
   private static final int MAX_DETAIL = 512;
+
+  /** The detail on the attempt row that marks an event as parked. */
+  static final String DEAD_LETTERED_DETAIL = "parked on " + Topics.NOTIFICATION_REQUESTED_DLT;
 
   private final NotificationRepository notifications;
   private final DeliveryAttemptRepository attempts;
@@ -77,20 +81,57 @@ public class DeliveryRecorder {
   /**
    * Append a FAILED attempt for this event, creating the notification row if the claim
    * itself was what failed.
+   *
+   * @param retriesRemaining whether the retry topics still hold another try, which is what
+   *     separates RETRYING from FAILED on the row; the attempt itself is FAILED either way
    */
   @Transactional
-  public void recordFailedAttempt(NotificationRequested event, Throwable cause) {
+  public void recordFailedAttempt(NotificationRequested event, Throwable cause,
+      boolean retriesRemaining) {
     Instant now = Instant.now(clock);
 
-    Notification notification = notifications.findById(event.eventId())
-        .orElseGet(() -> new Notification(event.eventId(), event.recipientId(),
-            event.destination(), event.channel(), event.templateKey(), event.payload(),
-            event.requestedAt(), now));
-    notification.markFailed(now);
+    Notification notification = findOrCreate(event, now);
+    if (retriesRemaining) {
+      notification.markRetrying(now);
+    } else {
+      notification.markFailed(now);
+    }
     // delivery_attempt carries a foreign key to notification, so the row has to exist before
     // the attempt can point at it. Same transaction, notification first.
     notifications.save(notification);
     attempts.save(new DeliveryAttempt(event.eventId(), DeliveryStatus.FAILED, detail(cause), now));
+  }
+
+  /**
+   * Record that the event reached the dead-letter topic, and say so in its attempt history.
+   *
+   * <p>Idempotent, because the DLT is consumed at-least-once like any other topic: a row
+   * already DEAD_LETTERED is left alone. So is a SENT one -- a notification that went out
+   * outranks a copy of its event that ended up parked.
+   *
+   * @return whether anything changed, so a redelivered DLT record is not counted twice
+   */
+  @Transactional
+  public boolean recordDeadLettered(NotificationRequested event) {
+    Instant now = Instant.now(clock);
+
+    Notification notification = findOrCreate(event, now);
+    if (notification.getStatus() == DeliveryStatus.SENT
+        || notification.getStatus() == DeliveryStatus.DEAD_LETTERED) {
+      return false;
+    }
+    notification.markDeadLettered(now);
+    notifications.save(notification);
+    attempts.save(new DeliveryAttempt(event.eventId(), DeliveryStatus.DEAD_LETTERED,
+        DEAD_LETTERED_DETAIL, now));
+    return true;
+  }
+
+  private Notification findOrCreate(NotificationRequested event, Instant now) {
+    return notifications.findById(event.eventId())
+        .orElseGet(() -> new Notification(event.eventId(), event.recipientId(),
+            event.destination(), event.channel(), event.templateKey(), event.payload(),
+            event.requestedAt(), now));
   }
 
   private static String detail(Throwable cause) {

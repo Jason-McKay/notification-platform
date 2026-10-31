@@ -26,14 +26,18 @@ this repo, see Gotchas).
 |---|---|---|
 | `notification-common` | plain jar | The wire contract: event records shared by both apps. No dependencies, not even Spring. |
 | `notification-api` | Boot app, :8080 | Write-only ingress. Validates, dedupes, publishes. Owns no tables. |
-| `notification-worker` | Boot app, :8081 | Consumes, dispatches, owns the schema and the status read. |
+| `notification-worker` | Boot app, :8081 | Consumes, dispatches, owns the schema, the delivery reads and the delivery metrics. |
 
 **`notification-common` must never apply `spring-boot-maven-plugin`.** Repackage rewrites
 the jar into `BOOT-INF/classes` and the other modules stop being able to consume it.
 
-**The worker owns the tables, so `GET /api/notifications/{eventId}` lives there**, not on
-the api — see [ADR 0003](docs/adr/0003-worker-owns-the-schema.md). Clients therefore POST
-to :8080 and GET from :8081.
+**The worker owns the tables, so the delivery reads live there**, not on the api — see
+[ADR 0003](docs/adr/0003-worker-owns-the-schema.md). Clients therefore POST to :8080 and
+GET from :8081: `GET /api/notifications` (a filtered page, newest first),
+`/api/notifications/stats` (counts over the last 24h) and `/api/notifications/{eventId}`
+(one delivery and its attempts), all in `NotificationStatusController` and all under the
+read scope, as are `/actuator/metrics/**` and `/actuator/prometheus`. None returns the
+payload. States, contract and metric names: [ADR 0005](docs/adr/0005-delivery-states-and-the-read-api.md).
 
 ## Commands
 
@@ -53,7 +57,7 @@ already installed: a module's parent is this repo's aggregator. Run `./mvnw inst
 or always pass `-am`.
 
 `http/notification-platform.http` is a runnable end-to-end scenario (token, 401, accept,
-replay, status read, 404). Select the `dev` environment from `http/http-client.env.json`
+replay, status read, 404, a dead-lettered event, the list, stats and metrics). Select the `dev` environment from `http/http-client.env.json`
 first. Works in IntelliJ's HTTP Client and VS Code's REST Client.
 
 CI (`.github/workflows/ci.yml`) runs `./mvnw -B verify` on push/PR — `verify`, not `test`,
@@ -83,7 +87,15 @@ because the ITs are what cover the wiring between the two deployables.
   `-retry-2000`, for 1s then 2s), so changing `@RetryableTopic`'s backoff renames them. And
   they still have to be listed in `@EmbeddedKafka`: `consumeFromEmbeddedTopics` validates
   against that list rather than against the broker, and rejects a topic that does exist with
-  "not in embedded topic list".
+  "not in embedded topic list". It also pins the status walk the caller sees: RETRYING while
+  a retry topic holds a try, then DEAD_LETTERED from the `@DltHandler`, with three FAILED
+  attempt rows and a DEAD_LETTERED marker row, and the SMS `failed`/`dead_lettered` counters
+  moving by 3 and 1 (asserted as deltas, so they hold whatever the context has seen before).
+- `NotificationReadIT` seeds rows through the repositories, not the broker, so each gets the
+  status and `updated_at` the assertion needs, then drives the list, filters, paging, size
+  cap, stats window and the Prometheus endpoint's 401/403/200 through MockMvc against real
+  MySQL. `DeliveryRecorderTest` covers the state transitions with Mockito, and
+  `DeliveryStatusTest` pins every status and channel name to the varchar(16) columns.
 - `EmailNotificationSenderTest` runs against GreenMail, an SMTP server inside the test JVM,
   so the one sender that speaks a real protocol is covered by a plain unit test with no
   container. `NotificationDispatchIT` uses the same server on GreenMail's conventional port
@@ -148,6 +160,11 @@ Most of these cost real time on the way in.
 - **Template placeholders are `{{name}}`, not `${name}`.** The templates live in
   `application.properties`, and Spring resolves `${...}` itself while binding: a variable
   spelled that way is an unresolvable placeholder and the worker will not start.
+- **A new `DeliveryStatus` must fit `varchar(16)`, on both tables.** Hibernate's
+  `ddl-auto=validate` checks neither the enum's constants nor the column length, so a longer
+  name starts fine and fails as "Data too long" on its first write; for a parking state that
+  write is inside the DLT handler. `DeliveryStatusTest` fails first. Widen both `status`
+  columns in a migration before adding one.
 - **Boot 4.1 is a young line.** Expect rough edges and bump patches early.
 
 ## Known gaps
@@ -171,9 +188,20 @@ Most of these cost real time on the way in.
 - The api accepts any `templateKey`: it owns no templates, so an unknown key is a 202
   followed by three failed attempts and a dead-lettered event. Validating at the edge means
   giving the api a copy of the template keys, which is a contract to keep in step.
-- There is no RETRYING state. A failed attempt is recorded as soon as it happens, so an
-  event still working its way through the retry topics reads `FAILED` between tries and only
-  settles when it is SENT or reaches the DLT.
+- A poison record (one that never deserializes) reaches the DLT but leaves no row: there is
+  no event id to record against, and the `@DltHandler` never sees it. The status read
+  answers 404 for it, as before.
+- The list pages by offset over `updated_at`, which changes, so a client paging while
+  deliveries are happening can see a row twice or miss one. Fine for a dashboard that
+  refreshes; an export would want keyset paging (ADR 0005).
+- A `@DltHandler` that throws sends the record back to the DLT (spring-kafka's default
+  `ALWAYS_RETRY_ON_ERROR`). Left alone because it is retry behaviour; the handler only
+  writes two rows.
+- Prometheus needs a bearer token to scrape, and dev tokens last an hour, so compose runs no
+  Prometheus server. A service credential is the IdP's job.
+- Rows parked before the RETRYING/DEAD_LETTERED states existed still read `FAILED`; nothing
+  backfills them. The new states are also one-way: older code cannot load them, so a
+  rollback maps them back by hand first (the SQL is in ADR 0005).
 - The retry topics are created by Spring Kafka on demand and named after the backoff delay
   (`notification.requested-retry-1000`, `-retry-2000`); only the main topic and the DLT are
   declared as beans.
@@ -193,5 +221,7 @@ Most of these cost real time on the way in.
   residual gap.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.
-- No git remote. Portfolio repos are public, so pushing needs an explicit go-ahead and a
-  look at the dev credentials in `application.properties` first.
+- **The remote is public**: `origin` is github.com/Jason-McKay/notification-platform.
+  Pushing still needs an explicit go-ahead, and whatever is committed is published, so no
+  secrets or absolute local paths. The credentials in `application.properties` are dev-only
+  stand-ins and already public.

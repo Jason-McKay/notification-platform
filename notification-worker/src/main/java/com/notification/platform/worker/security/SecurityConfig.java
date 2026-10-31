@@ -51,6 +51,10 @@ public class SecurityConfig {
         // The status read is a read: it takes the read scope, not the write one the api
         // guards its ingress with.
         .requestMatchers(HttpMethod.GET, "/api/notifications/**").hasAuthority(Scopes.READ_AUTHORITY)
+        // Delivery counts by channel and outcome are a read of the same records, so they
+        // take the same scope rather than being open like health.
+        .requestMatchers("/actuator/metrics/**", "/actuator/prometheus")
+          .hasAuthority(Scopes.READ_AUTHORITY)
         .anyRequest().authenticated())
       .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
       }));

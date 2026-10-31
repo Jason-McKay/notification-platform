@@ -8,6 +8,7 @@ import java.util.UUID;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.common.serialization.StringDeserializer;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -28,6 +29,7 @@ import com.notification.platform.common.event.NotificationChannel;
 import com.notification.platform.common.event.NotificationRequested;
 import com.notification.platform.common.event.Topics;
 import com.notification.platform.worker.channel.NotificationSender;
+import com.notification.platform.worker.domain.DeliveryAttempt;
 import com.notification.platform.worker.domain.DeliveryStatus;
 import com.notification.platform.worker.domain.Notification;
 import com.notification.platform.worker.repository.DeliveryAttemptRepository;
@@ -35,6 +37,8 @@ import com.notification.platform.worker.repository.NotificationRepository;
 import com.notification.platform.worker.template.RenderedMessage;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
+import static org.awaitility.Awaitility.await;
 
 /**
  * The other half of the failure story: a record that deserializes fine and then fails
@@ -45,6 +49,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  * involved. A sender that throws takes the longer path -- one retry topic per backoff
  * interval, then the DLT -- and that is the path a real provider will take the first time
  * it times out.
+ *
+ * <p>It also walks the status the caller reads along that path: RETRYING while a retry
+ * topic still holds a try, then DEAD_LETTERED once the DLT handler has the event.
  *
  * <p>Three attempts here rather than the one {@code NotificationDispatchIT} uses, because
  * the retry topics are the point: the backoff is 1s then 2s, so the sequence costs about
@@ -120,9 +127,14 @@ class NotificationRetryIT {
   @Autowired
   private EmbeddedKafkaBroker broker;
 
+  @Autowired
+  private MeterRegistry meters;
+
   @Test
   void aSenderThatThrowsIsRetriedThenDeadLettered() {
     NotificationRequested event = event(UUID.randomUUID());
+    double failedBefore = smsDeliveries("failed");
+    double parkedBefore = smsDeliveries("dead_lettered");
 
     Map<String, Object> props =
         KafkaTestUtils.consumerProps(broker.getBrokersAsString(), "retry-it", "true");
@@ -132,6 +144,13 @@ class NotificationRetryIT {
           Topics.NOTIFICATION_REQUESTED_DLT);
 
       kafkaTemplate.send(Topics.NOTIFICATION_REQUESTED, event.partitionKey(), event);
+
+      // While the retry topics still hold a try, the row says so rather than FAILED. The
+      // backoff is 1s then 2s, so this lasts about three seconds.
+      await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+          assertThat(notifications.findById(event.eventId()))
+              .get()
+              .satisfies(record -> assertThat(record.getStatus()).isEqualTo(DeliveryStatus.RETRYING)));
 
       // One record on each retry topic and one on the DLT: the whole sequence.
       ConsumerRecords<String, String> records =
@@ -145,21 +164,37 @@ class NotificationRetryIT {
           .satisfies(record -> assertThat(record.value()).contains(event.eventId().toString()));
     }
 
-    // And it left a trace the caller can see. DispatchService is transactional and the
-    // sender throws inside it, so everything the attempt wrote rolls back; DeliveryRecorder
-    // writing from the listener afterwards is the only reason there is a row here at all.
-    // Without it the status read answers 404 for an event the api accepted with 202.
-    assertThat(notifications.findById(event.eventId()))
-        .get()
-        .satisfies(record -> assertThat(record.getStatus()).isEqualTo(DeliveryStatus.FAILED));
+    // And it left a trace the caller can see. The listener records each failed try before
+    // rethrowing, and the DLT handler settles the row once the event is parked. Without
+    // either, the status read would answer 404 for an event the api accepted with 202.
+    await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        assertThat(notifications.findById(event.eventId()))
+            .get()
+            .satisfies(record -> assertThat(record.getStatus()).isEqualTo(DeliveryStatus.DEAD_LETTERED)));
 
-    // One attempt per try, not just the last one.
+    // One attempt per try, not just the last one, then the marker that it was parked.
     assertThat(attempts.findByEventIdOrderByAttemptedAtAsc(event.eventId()))
-        .hasSize(3)
-        .allSatisfy(attempt -> {
-          assertThat(attempt.getStatus()).isEqualTo(DeliveryStatus.FAILED);
-          assertThat(attempt.getDetail()).isEqualTo("sms provider is down");
-        });
+        .extracting(DeliveryAttempt::getStatus, DeliveryAttempt::getDetail)
+        .containsExactly(
+            tuple(DeliveryStatus.FAILED, "sms provider is down"),
+            tuple(DeliveryStatus.FAILED, "sms provider is down"),
+            tuple(DeliveryStatus.FAILED, "sms provider is down"),
+            tuple(DeliveryStatus.DEAD_LETTERED, "parked on " + Topics.NOTIFICATION_REQUESTED_DLT));
+
+    // The metrics tell the same story: every failed try, then the parking once. Awaited,
+    // because the counter moves just after the commit the row assertion above saw.
+    await().atMost(Duration.ofSeconds(5)).untilAsserted(() -> {
+      assertThat(smsDeliveries("failed") - failedBefore).isEqualTo(3.0);
+      assertThat(smsDeliveries("dead_lettered") - parkedBefore).isEqualTo(1.0);
+    });
+  }
+
+  private double smsDeliveries(String outcome) {
+    return meters.get("notification.delivery")
+        .tag("channel", "SMS")
+        .tag("outcome", outcome)
+        .counter()
+        .count();
   }
 
   private static NotificationRequested event(UUID eventId) {
