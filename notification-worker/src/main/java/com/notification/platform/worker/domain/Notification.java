@@ -83,8 +83,18 @@ public class Notification {
     this.updatedAt = at;
   }
 
+  public void markRetrying(Instant at) {
+    this.status = DeliveryStatus.RETRYING;
+    this.updatedAt = at;
+  }
+
   public void markFailed(Instant at) {
     this.status = DeliveryStatus.FAILED;
+    this.updatedAt = at;
+  }
+
+  public void markDeadLettered(Instant at) {
+    this.status = DeliveryStatus.DEAD_LETTERED;
     this.updatedAt = at;
   }
 }
