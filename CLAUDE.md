@@ -51,6 +51,11 @@ GET from :8081: `GET /api/notifications` (a filtered page, newest first),
 read scope, as are `/actuator/metrics/**` and `/actuator/prometheus`. None returns the
 payload. States, contract and metric names: [ADR 0005](docs/adr/0005-delivery-states-and-the-read-api.md).
 
+**With an `Idempotency-Key`, the event id is derived from it** (`EventIds`, UUIDv5), and Redis
+records the key only after the broker's ack, so a retry carries the same id and the worker
+absorbs any copy: at-least-once on the wire, one row per event id. See
+[ADR 0006](docs/adr/0006-delivery-guarantees.md).
+
 ## Commands
 
 Maven wrapper (`./mvnw` in Bash, `.\mvnw.cmd` in PowerShell), from the repo root:
@@ -85,11 +90,13 @@ Rules, with the reasons in `docs/testing.md`:
   Testcontainers Kafka images set `listeners` to `0.0.0.0` and fail to start here (see
   *Gotchas*). MySQL and Redis containers work fine and are used.
 - **Which test covers what:** `NotificationDispatchIT` (event on the broker → row in MySQL,
-  plus the poison record), `NotificationIngressIT` (an accepted request reaches the topic),
-  `NotificationRetryIT` (retry topics, the DLT, the status walk and counters),
+  plus the poison record and a republished event id), `NotificationIngressIT` (an accepted
+  request reaches the topic, and a retry after a timed-out publish or a Redis failure carries
+  the same id), `NotificationRetryIT` (retry topics, the DLT, the status walk and counters),
   `NotificationReadIT` (the read api against real MySQL), `DeliveryRecorderTest`
   (transitions), `DeliveryStatusTest` (names fit the columns), `EmailNotificationSenderTest`
-  (GreenMail inside the test JVM).
+  (GreenMail inside the test JVM), `EventIdsTest` (the derivation cannot drift),
+  `KafkaProducerConfigTest` (acks and idempotence cannot be weakened).
 - **The consumer needs `ErrorHandlingDeserializer`, and the worker needs a producer that
   serializes both a `NotificationRequested` and a raw `byte[]`** (`KafkaProducerConfig`).
   `poisonRecordEndsUpOnTheDeadLetterTopic` pins both.
@@ -138,6 +145,9 @@ Rules, with the reasons in `docs/gotchas.md`:
 - **Template placeholders are `{{name}}`, not `${name}`**, or the worker will not start.
 - **A new `DeliveryStatus` must fit `varchar(16)`, on both tables.** Widen both `status`
   columns in a migration before adding one.
+- **`EventIds.NAMESPACE` must never change**, nor the key's UTF-8 encoding: either re-keys
+  every retry in flight across the deploy, and the worker delivers those twice.
+- **The api's acks and idempotence are set in `KafkaProducerConfig`**, overriding properties.
 - **Boot 4.1 is a young line.** Expect rough edges and bump patches early.
 
 ## Known gaps
@@ -161,6 +171,10 @@ Each is a line here; why it is open, and what closing it would take, is in `docs
 - Only the main topic and the DLT are declared as beans; retry topics are created on demand.
 - A crash between the send and the SENT record sends again (ADR 0004). At-least-once,
   deliberately.
+- **An `Idempotency-Key` names its event permanently and globally**: reuse after the 24h TTL
+  is absorbed but answered `duplicate=false`, and keys are not scoped to the client (ADR 0006).
+- **A 5xx from the POST means "not confirmed", not "not sent"**: retry under the same key. A
+  different body under a reused key is not detected.
 - **`notification.requested` is a `NewTopic` bean in both apps**, at 3 partitions (the worker
   ITs' `@EmbeddedKafka` matches). **The DLT is still declared only by the api** — a residual
   race.

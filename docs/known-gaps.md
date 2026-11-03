@@ -54,5 +54,26 @@ text below says "this file", it means `CLAUDE.md` as it stood when the passage w
   for `notification.requested-dlt` in principle; it is a narrower window (the DLT is not on
   the consume path and is created by the worker's `@RetryableTopic` machinery), left as a
   residual gap.
+- **An `Idempotency-Key` names its event permanently, and globally** (ADR 0006). The event id
+  is derived from the key alone, so a key reused after Redis's 24h TTL derives the original
+  id: the worker absorbs it and the api answers 202 `duplicate=false`, and nothing is sent.
+  Keys must be unique per notification. They are also not scoped to the client, which is moot
+  with one client credential; with the IdP above, the derivation and the Redis key need to be
+  over the client and the key together.
+- **A 5xx from the POST means "not confirmed", not "not sent"** (ADR 0006). A publish that
+  timed out may still land; the client must retry under the same key, and the worker absorbs
+  the copy if it did. A copy that meets a retry of the first one from a retry topic can still
+  send twice, as at-least-once allows.
+- Reusing a key with a different body is not detected: the second body is ignored.
+- Concurrent requests under one key can both publish. They carry the same event id, so the
+  worker absorbs the copy and only one caller is told `duplicate=false`.
+- Redis down *before* the publish fails the request (5xx) and publishes nothing. Deliberate:
+  publishing would be safe for delivery, but a replay would be answered `duplicate=false`.
+- Rolling out ADR 0006 has a window: an old instance still claims before publishing, so until
+  the last one stops, and for up to 24h after, a claim it left behind can still swallow a
+  retry.
+- `NotificationEventPublisher` awaits the ack for 5s, but `KafkaTemplate.send` can first block
+  for up to `max.block.ms` (60s) fetching metadata, so a dead broker holds a request thread for
+  about a minute before the 5xx.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.

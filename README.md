@@ -12,7 +12,7 @@ different reasons, which is the point of the exercise.
 | Module | What it is |
 |---|---|
 | `notification-common` | The wire contract: event records, channel enum, topic names. No dependencies, not even Spring. |
-| `notification-api` | Write-only ingress on :8080. Validates, dedupes on `Idempotency-Key` in Redis, publishes. Owns no tables. |
+| `notification-api` | Write-only ingress on :8080. Validates, derives the event id from `Idempotency-Key`, publishes, and remembers the key in Redis for the replay answer. Owns no tables. |
 | `notification-worker` | Consumer on :8081. Dispatches through a channel abstraction, owns the schema and serves the delivery reads and metrics. |
 
 ## Running it
@@ -37,6 +37,11 @@ curl -s -X POST localhost:8080/api/notifications \
 # the id comes back from the POST; the status read is on the worker, not the api
 curl -s localhost:8081/api/notifications/<eventId> -H "Authorization: Bearer $TOKEN"
 ```
+
+Sending the same `Idempotency-Key` again returns the same event id with `"duplicate": true`.
+A 5xx means the publish was not confirmed, not that it failed: retry under the same key and
+the worker absorbs any copy that did get through. Keys must be unique per notification
+([ADR 0006](docs/adr/0006-delivery-guarantees.md)).
 
 The EMAIL channel really sends: the compose stack runs a mail catcher, and the rendered
 message is waiting at http://localhost:8025.
@@ -99,6 +104,7 @@ The non-obvious ones are recorded in [`docs/adr/`](docs/adr/README.md):
 - [0003](docs/adr/0003-worker-owns-the-schema.md) — the worker owns the schema, and therefore the status read
 - [0004](docs/adr/0004-the-provider-call-leaves-the-transaction.md) — the provider call leaves the transaction
 - [0005](docs/adr/0005-delivery-states-and-the-read-api.md) — delivery states, the read api, and what the metrics expose
+- [0006](docs/adr/0006-delivery-guarantees.md) — delivery guarantees: a derived event id, and keys recorded after the ack
 
 `CLAUDE.md` carries the working notes: commands, conventions, and the traps this stack has
 already sprung.
