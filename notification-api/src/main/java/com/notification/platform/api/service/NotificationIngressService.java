@@ -12,6 +12,7 @@ import com.notification.platform.api.dto.NotificationRequest;
 import com.notification.platform.api.dto.NotificationResponse;
 import com.notification.platform.api.integration.cache.IdempotencyStore;
 import com.notification.platform.api.integration.kafka.NotificationEventPublisher;
+import com.notification.platform.api.metrics.IngressMetrics;
 import com.notification.platform.common.event.NotificationRequested;
 
 import lombok.RequiredArgsConstructor;
@@ -26,6 +27,7 @@ public class NotificationIngressService {
   private final IdempotencyStore idempotencyStore;
   private final NotificationEventPublisher publisher;
   private final Clock clock;
+  private final IngressMetrics metrics;
 
   /**
    * Accept a request for delivery.
@@ -45,7 +47,7 @@ public class NotificationIngressService {
     if (idempotencyKey == null || idempotencyKey.isBlank()) {
       UUID eventId = UUID.randomUUID();
       publish(request, eventId);
-      return new NotificationResponse(eventId, false);
+      return counted(new NotificationResponse(eventId, false));
     }
 
     // Redis being down here fails the request before anything is published. Going on would
@@ -53,13 +55,23 @@ public class NotificationIngressService {
     Optional<UUID> alreadyPublished = idempotencyStore.findPublished(idempotencyKey);
     if (alreadyPublished.isPresent()) {
       log.debug("idempotency key {} replays event {}", idempotencyKey, alreadyPublished.get());
-      return new NotificationResponse(alreadyPublished.get(), true);
+      return counted(new NotificationResponse(alreadyPublished.get(), true));
     }
 
     UUID eventId = EventIds.forIdempotencyKey(idempotencyKey);
     // A throw is an honest 5xx with nothing to release: Redis has not been told anything.
     publish(request, eventId);
-    return new NotificationResponse(eventId, !recordPublished(idempotencyKey, eventId));
+    return counted(new NotificationResponse(eventId, !recordPublished(idempotencyKey, eventId)));
+  }
+
+  /** Count what the client is about to be told. By now the outcome is settled. */
+  private NotificationResponse counted(NotificationResponse response) {
+    if (response.duplicate()) {
+      metrics.duplicate();
+    } else {
+      metrics.accepted();
+    }
+    return response;
   }
 
   /**
@@ -79,14 +91,27 @@ public class NotificationIngressService {
     }
   }
 
+  /**
+   * Publish and await the ack, timed either way.
+   *
+   * <p>Any {@code RuntimeException} counts as a failed publish, not only
+   * {@code PublishFailedException}: a send that throws before it returns a future (say,
+   * blocked on metadata) is a 5xx to the client all the same.
+   */
   private void publish(NotificationRequest request, UUID eventId) {
-    publisher.publish(new NotificationRequested(
+    NotificationRequested event = new NotificationRequested(
         eventId,
         request.recipientId(),
         request.destination(),
         request.channel(),
         request.templateKey(),
         request.payload(),
-        Instant.now(clock)));
+        Instant.now(clock));
+    try {
+      metrics.timePublish(() -> publisher.publish(event));
+    } catch (RuntimeException e) {
+      metrics.publishFailed();
+      throw e;
+    }
   }
 }
