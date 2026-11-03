@@ -1,0 +1,103 @@
+# Alert rules over what both apps export. Prometheus evaluates them and shows them on
+# http://localhost:9090/alerts; compose runs no Alertmanager, so nothing is sent anywhere.
+# Unit tests: alerts.test.yml (promtool test rules), run in CI.
+#
+# Kafka's client reports every topic twice, as notification.requested and as
+# notification_requested, so the lag rules match the dotted form only.
+groups:
+  - name: notification-platform
+    rules:
+      # Every parked event is one a person has to look at, so one is enough.
+      - alert: NotificationDeadLettered
+        expr: |
+          sum by (channel) (
+            increase(notification_delivery_total{outcome="dead_lettered"}[5m])
+          ) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.channel }} notification dead-lettered"
+          description: >-
+            At least one {{ $labels.channel }} notification exhausted its retries in the last
+            5 minutes. List them on the worker:
+            GET /api/notifications?status=DEAD_LETTERED&channel={{ $labels.channel }}
+
+      # failed counts every failed try, retries included, so a parked event counts three times.
+      # No traffic is 0/0, which never fires.
+      - alert: NotificationFailureRatioHigh
+        expr: |
+          sum by (channel) (rate(notification_delivery_total{outcome="failed"}[5m]))
+            /
+          sum by (channel) (rate(notification_delivery_total{outcome=~"sent|failed"}[5m]))
+            > 0.2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.channel }} tries are failing"
+          description: >-
+            {{ $value | humanizePercentage }} of {{ $labels.channel }} tries failed over the
+            last 5 minutes.
+
+      - alert: NotificationDispatchSlow
+        expr: |
+          histogram_quantile(0.95,
+            sum by (le, channel) (rate(notification_dispatch_duration_seconds_bucket[5m]))
+          ) > 2
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $labels.channel }} dispatch p95 is above 2s"
+          description: >-
+            The slowest 5% of {{ $labels.channel }} dispatches took over
+            {{ $value | humanizeDuration }} in the last 5 minutes.
+
+      # A client told 5xx should retry under the same key (ADR 0006), so a single failure is
+      # noise; one in every 5-minute window for 5 minutes is the broker or the network.
+      - alert: NotificationPublishFailing
+        expr: |
+          sum(rate(notification_ingress_total{outcome="publish_failed"}[5m])) > 0
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "The api cannot publish to Kafka"
+          description: >-
+            Publishes to Kafka have failed in every 5-minute window for 5 minutes, and
+            clients have been told 5xx.
+
+      # Also fires when the app is up but refuses the scrape: an expired token is a 401.
+      - alert: NotificationTargetDown
+        expr: |
+          up{job=~"notification-api|notification-worker"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.job }} cannot be scraped"
+          description: >-
+            Prometheus has failed to scrape {{ $labels.instance }} for a minute. Either the app
+            is down, or it refused the scrape (check the scrape-token container's log).
+
+      # Above a floor and still climbing for 10 minutes: the worker is not keeping up. A
+      # short burst, like the load script's, drains well inside that.
+      - alert: NotificationConsumerLagGrowing
+        expr: |
+          sum by (topic) (
+            kafka_consumer_fetch_manager_records_lag{
+              job="notification-worker", topic=~"notification\\.requested.*"}
+          ) > 100
+            and
+          deriv(sum by (topic) (
+            kafka_consumer_fetch_manager_records_lag{
+              job="notification-worker", topic=~"notification\\.requested.*"}
+          )[10m:1m]) > 0
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Consumer lag on {{ $labels.topic }} keeps growing"
+          description: >-
+            The worker is {{ $value | humanize }} records behind on {{ $labels.topic }} and
+            the lag has grown for 10 minutes.
