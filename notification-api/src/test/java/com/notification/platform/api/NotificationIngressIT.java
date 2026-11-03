@@ -5,6 +5,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.Duration;
+import java.time.Instant;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.TimeoutException;
@@ -22,6 +23,11 @@ import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.test.EmbeddedKafkaBroker;
 import org.springframework.kafka.test.context.EmbeddedKafka;
 import org.springframework.kafka.test.utils.KafkaTestUtils;
+import org.springframework.security.oauth2.jose.jws.MacAlgorithm;
+import org.springframework.security.oauth2.jwt.JwsHeader;
+import org.springframework.security.oauth2.jwt.JwtClaimsSet;
+import org.springframework.security.oauth2.jwt.JwtEncoder;
+import org.springframework.security.oauth2.jwt.JwtEncoderParameters;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
@@ -36,6 +42,7 @@ import com.notification.platform.api.security.TokenService;
 import com.notification.platform.api.service.EventIds;
 import com.notification.platform.common.event.NotificationRequested;
 import com.notification.platform.common.event.Topics;
+import com.notification.platform.common.security.Scopes;
 
 import tools.jackson.databind.json.JsonMapper;
 
@@ -53,7 +60,8 @@ import static org.mockito.Mockito.doThrow;
  * satisfy a template typed to the event, which no mocked test can see.
  *
  * <p>It also pins what reaches the topic when a publish or the Redis write fails part way:
- * the shapes the worker has to absorb (ADR 0006).
+ * the shapes the worker has to absorb (ADR 0006), and that the ingress metrics take the read
+ * scope (ADR 0007).
  *
  * <p>Needs Docker for Redis. Kafka is the embedded broker; see the note in
  * {@code NotificationDispatchIT} for why not Testcontainers.
@@ -90,6 +98,9 @@ class NotificationIngressIT {
 
   @Autowired
   private TokenService tokenService;
+
+  @Autowired
+  private JwtEncoder jwtEncoder;
 
   @Autowired
   private EmbeddedKafkaBroker broker;
@@ -214,6 +225,20 @@ class NotificationIngressIT {
   }
 
   @Test
+  void prometheusTakesTheReadScope() throws Exception {
+    assertThat(scrape(null).statusCode()).isEqualTo(401);
+    assertThat(scrape(writeOnlyToken()).statusCode()).isEqualTo(403);
+
+    // Registered up front, so the series are there whichever test ran first.
+    HttpResponse<String> scraped = scrape(tokenService.issue("notification-client"));
+    assertThat(scraped.statusCode()).isEqualTo(200);
+    assertThat(scraped.body())
+        .contains("notification_ingress_total")
+        .contains("outcome=\"publish_failed\"")
+        .contains("notification_publish_duration_seconds_bucket");
+  }
+
+  @Test
   void writeWithoutATokenIsRejected() throws Exception {
     HttpResponse<String> response = http.send(
         HttpRequest.newBuilder(URI.create(baseUrl() + "/api/notifications"))
@@ -234,6 +259,29 @@ class NotificationIngressIT {
             .POST(HttpRequest.BodyPublishers.ofString(BODY))
             .build(),
         HttpResponse.BodyHandlers.ofString());
+  }
+
+  private HttpResponse<String> scrape(String token) throws Exception {
+    HttpRequest.Builder request =
+        HttpRequest.newBuilder(URI.create(baseUrl() + "/actuator/prometheus"));
+    if (token != null) {
+      request.header("Authorization", "Bearer " + token);
+    }
+    return http.send(request.GET().build(), HttpResponse.BodyHandlers.ofString());
+  }
+
+  /** Authenticates, but carries only the scope a publish-only client would hold. */
+  private String writeOnlyToken() {
+    Instant now = Instant.now();
+    JwtClaimsSet claims = JwtClaimsSet.builder()
+        .issuer("notification-api")
+        .issuedAt(now)
+        .expiresAt(now.plusSeconds(60))
+        .subject("write-only-client")
+        .claim("scope", Scopes.WRITE)
+        .build();
+    return jwtEncoder.encode(JwtEncoderParameters.from(
+        JwsHeader.with(MacAlgorithm.HS256).build(), claims)).getTokenValue();
   }
 
   private String baseUrl() {
