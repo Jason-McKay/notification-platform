@@ -59,3 +59,18 @@ text below says "this file", it means `CLAUDE.md` as it stood when the passage w
 - Keep the surefire/failsafe `-Dapi.version=1.44` argLine in the root pom. docker-java
   defaults to a Docker API version below the minimum Docker Engine 29+ enforces, and the
   failure is the misleading "Could not find a valid Docker environment".
+- The meters are pinned where they are defined, without a context. `IngressMetricsTest` and
+  `DeliveryMetricsTest` assert every outcome series exists at zero before the first request
+  or event, since a series that appears only on its first increment is invisible to `rate()`
+  and to an alert until then; `DeliveryMetricsTest` renders a `PrometheusMeterRegistry` and
+  asserts `notification_dispatch_duration_seconds_bucket`, which the p95 panel and
+  `NotificationDispatchSlow` need. `NotificationIngressServiceTest` asserts what each branch
+  counts, including nothing for a Redis failure before the publish, and
+  `NotificationIngressIT.prometheusTakesTheReadScope` the api endpoint's 401/403/200.
+- The alert rules have promtool unit tests in `observability/prometheus/alerts.test.yml`:
+  the dead-letter, target-down, failure-ratio and consumer-lag alerts, each silent before its
+  condition and its `for`, firing after, with labels and annotations. CI's `observability`
+  job runs `check config --syntax-only` (the scrape token file only exists inside compose),
+  `check rules` and `test rules` in the image compose pins, so keep the two tags in step.
+  Locally, from PowerShell, where Git Bash would rewrite the container path:
+  `docker run --rm -v "${PWD}\observability\prometheus:/etc/prometheus:ro" --entrypoint promtool prom/prometheus:v3.15.1 test rules /etc/prometheus/alerts.test.yml`.

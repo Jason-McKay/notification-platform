@@ -8,7 +8,7 @@
   api, -DelayMs apart, each under a fresh Idempotency-Key. Channels rotate EMAIL, SMS, PUSH.
   Every 10th request repeats the one before it, key and all, so the api answers it as a
   duplicate. Every 20th names a template the worker does not have, so it fails each try and
-  is dead-lettered: the NotificationDeadLettered alert fires a few seconds later.
+  is dead-lettered: the NotificationDeadLettered alert fires within half a minute.
 
   Keys carry a random run id, because MySQL's volume outlives `docker compose down` and a
   reused key names the earlier run's event (ADR 0006).
