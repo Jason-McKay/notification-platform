@@ -60,7 +60,7 @@ class EventIdsTest {
     // stop being UTF-8, which would re-key every such request just as a new namespace would.
     assertThat(EventIds.forIdempotencyKey("order-A-1001-shipped"))
         .isEqualTo(UUID.fromString("1a9de433-944a-5354-bce6-c653bbd57b57"));
-    assertThat(EventIds.forIdempotencyKey("résumé-1"))
+    assertThat(EventIds.forIdempotencyKey("r\u00e9sum\u00e9-1"))
         .isEqualTo(UUID.fromString("e3e360ae-792b-5f34-b661-57424a8d14d0"));
   }
 }
