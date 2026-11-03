@@ -139,6 +139,38 @@ class NotificationDispatchIT {
   }
 
   @Test
+  void absorbsARepublishOfAnEventIdTheApiCouldNotConfirm() {
+    // What the api sends when a publish timed out but the broker had taken it, and the client
+    // retried under the same Idempotency-Key: the same derived event id, stamped again. Not a
+    // redelivery of one record but two records, so the copy differs in requestedAt (ADR 0006).
+    UUID eventId = UUID.randomUUID();
+    NotificationRequested first = event(eventId);
+    NotificationRequested retry = new NotificationRequested(eventId, first.recipientId(),
+        first.destination(), first.channel(), first.templateKey(), first.payload(),
+        first.requestedAt().plusSeconds(7));
+
+    kafkaTemplate.send(Topics.NOTIFICATION_REQUESTED, first.partitionKey(), first);
+    kafkaTemplate.send(Topics.NOTIFICATION_REQUESTED, retry.partitionKey(), retry);
+
+    await().atMost(Duration.ofSeconds(30)).untilAsserted(() ->
+        assertThat(notifications.findById(eventId))
+            .get()
+            .satisfies(notification ->
+                assertThat(notification.getStatus()).isEqualTo(DeliveryStatus.SENT)));
+
+    // One row, kept as the first copy wrote it; one attempt; one message to the customer.
+    // Held for two seconds so the copy has had every chance to send again.
+    await().during(Duration.ofSeconds(2)).atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
+      assertThat(notifications.findById(eventId))
+          .get()
+          .satisfies(notification ->
+              assertThat(notification.getRequestedAt()).isEqualTo(first.requestedAt()));
+      assertThat(attempts.findByEventIdOrderByAttemptedAtAsc(eventId)).hasSize(1);
+      assertThat(SMTP.getReceivedMessages()).hasSize(1);
+    });
+  }
+
+  @Test
   void poisonRecordEndsUpOnTheDeadLetterTopic() {
     // A record the worker cannot deserialize at all. It fails before the listener runs, so
     // only ErrorHandlingDeserializer sees it -- and republishing it needs a producer that can
