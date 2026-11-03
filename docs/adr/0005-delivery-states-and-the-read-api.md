@@ -1,6 +1,6 @@
 # 5. Delivery states, the read api, and what the metrics expose
 
-- **Status:** Accepted
+- **Status:** Accepted; the compose consequence is amended by [0007](0007-scraping-inside-compose.md)
 - **Date decided:** 2026-10-31
 - **Date recorded:** 2026-10-31, with the list, stats and metrics endpoints
 
