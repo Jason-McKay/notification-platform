@@ -8,11 +8,13 @@ import java.util.UUID;
 /**
  * A request to send one notification, as published to {@link Topics#NOTIFICATION_REQUESTED}.
  *
- * <p>{@code eventId} is the idempotency anchor: the api derives it once per accepted
- * request and the worker uses it to recognise a redelivery, so a message replayed by Kafka
- * does not send twice.
+ * <p>{@code eventId} is the idempotency anchor: the api derives it from the client's
+ * {@code Idempotency-Key} when there is one, and the worker uses it to recognise a copy it
+ * has seen, so neither a message replayed by Kafka nor one republished by a client's retry
+ * sends twice. Opaque to the worker: how the api derives it is the api's business.
  *
- * @param eventId     unique per accepted request, stable across redeliveries
+ * @param eventId     one per notification: the same for every retry under one
+ *                    Idempotency-Key, and across redeliveries
  * @param recipientId who the notification is for, opaque to this platform
  * @param destination where to deliver it -- an address, a number, a device token. Separate
  *                    from recipientId on purpose: that is who, this is where, and the two

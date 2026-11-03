@@ -11,12 +11,16 @@ import org.springframework.stereotype.Component;
 import lombok.RequiredArgsConstructor;
 
 /**
- * Redis-backed claim on an {@code Idempotency-Key}.
+ * Redis-backed memory of which {@code Idempotency-Key}s have already been published.
  *
- * <p>A single {@code SET key value NX EX ttl} is the whole mechanism: whoever sets the key
- * first owns the request, and everyone else is told which event id already exists. Doing
- * it in one round trip is the point -- a GET-then-SET would let two concurrent retries of
- * the same request both decide they were first.
+ * <p>An entry is written only <em>after</em> the broker has acknowledged the event, so its
+ * presence means exactly that: this key's event is on the topic. Nothing is claimed up front
+ * and nothing has to be released when a publish fails, so a Redis outage on the failure path
+ * cannot leave a key that swallows the client's retry (ADR 0006).
+ *
+ * <p>What this store decides is the replay answer -- the stored event id and
+ * {@code duplicate=true} -- not whether a retry is safe. The event id is derived from the key,
+ * so a retry that misses Redis republishes the same event, and the worker absorbs the copy.
  */
 @Component
 @RequiredArgsConstructor
@@ -29,30 +33,21 @@ public class IdempotencyStore {
   @Value("${notification.idempotency.ttl:PT24H}")
   private Duration ttl;
 
-  /**
-   * Claim {@code key} for {@code eventId}.
-   *
-   * @return empty when the claim was won and the caller should go on to publish; the
-   *         already-stored event id when this request is a replay
-   */
-  public Optional<UUID> claim(String key, UUID eventId) {
-    String redisKey = KEY_PREFIX + key;
-    Boolean won = redis.opsForValue().setIfAbsent(redisKey, eventId.toString(), ttl);
-    if (Boolean.TRUE.equals(won)) {
-      return Optional.empty();
-    }
-    // Not null-safe by accident: the key can expire between the SETNX and this GET, in
-    // which case there is nothing to report as a duplicate and letting the request through
-    // is the right answer -- it is a replay of something already forgotten.
-    String existing = redis.opsForValue().get(redisKey);
-    return Optional.ofNullable(existing).map(UUID::fromString);
+  /** The event id already published under {@code key}, if this request is a replay. */
+  public Optional<UUID> findPublished(String key) {
+    return Optional.ofNullable(redis.opsForValue().get(KEY_PREFIX + key)).map(UUID::fromString);
   }
 
   /**
-   * Drop a claim. Called when publishing failed, so the client's retry is not rejected as
-   * a duplicate of an event that never reached the topic.
+   * Remember that {@code key}'s event has been acknowledged by the broker.
+   *
+   * <p>{@code SET NX}, so of two concurrent requests under one key that both published, only
+   * one is told it was first. The other is a replay of the same event, and says so.
+   *
+   * @return whether this call wrote the entry; false when another request already had
    */
-  public void release(String key) {
-    redis.delete(KEY_PREFIX + key);
+  public boolean recordPublished(String key, UUID eventId) {
+    return Boolean.TRUE.equals(
+        redis.opsForValue().setIfAbsent(KEY_PREFIX + key, eventId.toString(), ttl));
   }
 }
