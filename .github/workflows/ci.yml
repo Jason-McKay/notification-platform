@@ -25,3 +25,21 @@ jobs:
       # that covers the wiring between the two deployables unexecuted in CI.
       - name: Build and test
         run: ./mvnw -B verify
+
+  # The Prometheus config and alert rules compose loads, checked by the promtool in the image
+  # compose pins -- keep the two tags in step. One image pull, no Maven.
+  observability:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # --syntax-only because the scrape token file only exists inside compose.
+      - name: Check Prometheus config and rules, run the rule tests
+        run: |
+          promtool() {
+            docker run --rm -v "$PWD/observability/prometheus:/etc/prometheus:ro" \
+              --entrypoint promtool prom/prometheus:v3.15.1 "$@"
+          }
+          promtool check config --syntax-only /etc/prometheus/prometheus.yml
+          promtool check rules /etc/prometheus/alerts.yml
+          promtool test rules /etc/prometheus/alerts.test.yml
