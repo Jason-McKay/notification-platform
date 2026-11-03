@@ -40,6 +40,22 @@ text below says "this file", it means `CLAUDE.md` as it stood when the passage w
   container. `NotificationDispatchIT` uses the same server on GreenMail's conventional port
   3025, bound with `spring.mail.host=127.0.0.1` rather than localhost, which can resolve to
   ::1 first and refuse the connection.
+- The delivery guarantees of ADR 0006 are proved in halves, because there is no harness that
+  runs both deployables together and one would need a new module. `NotificationIngressIT`
+  pins what reaches the topic: `retryAfterAnAckedButTimedOutPublishCarriesTheSameEventId`
+  spies the publisher so the first send lands and then reports a timeout, and asserts the
+  5xx, the retry's 202 `duplicate=false` under `EventIds.forIdempotencyKey`, and two records
+  carrying that one id; `aRedisFailureAfterTheAckDoesNotSwallowTheRetry` fails
+  `recordPublished` once and asserts both calls are accepted, the retry is republished rather
+  than swallowed, and the next replay reads `duplicate=true`. The spies are
+  `@MockitoSpyBean`, real unless stubbed and reset after each test. Every test there drains
+  the records it produced from the shared consumer, or the next one's count is off.
+  `NotificationDispatchIT.absorbsARepublishOfAnEventIdTheApiCouldNotConfirm` feeds the worker
+  that shape -- two records, one event id, different `requestedAt` -- and holds for 2s that
+  there is one row (keeping the first `requestedAt`), one attempt and one SMTP message.
+  `NotificationIngressServiceTest` covers each branch with mocks, `EventIdsTest` pins the
+  derivation against RFC 9562's vector and a golden value with a non-ASCII key, and
+  `KafkaProducerConfigTest` pins that no property can weaken `acks=all` or idempotence.
 - Keep the surefire/failsafe `-Dapi.version=1.44` argLine in the root pom. docker-java
   defaults to a Docker API version below the minimum Docker Engine 29+ enforces, and the
   failure is the misleading "Could not find a valid Docker environment".

@@ -10,6 +10,11 @@
 #
 # EMAIL is delivered over SMTP to the compose stack's mail catcher. Read what arrived at
 # http://localhost:8025 -- the rendered subject and body are the point.
+#
+# The event id is derived from the Idempotency-Key (docs/adr/0006), and MySQL's volume
+# outlives `docker compose down` while Redis does not. So on a stack that has run this
+# before, demo-key-001 is the earlier event: still 202 and SENT, but no new email. Change
+# the key for a fresh send.
 
 ### Get a bearer token (the api mints it; the worker verifies the same one)
 # @name token

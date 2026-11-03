@@ -54,4 +54,13 @@ Most of these cost real time on the way in.
   name starts fine and fails as "Data too long" on its first write; for a parking state that
   write is inside the DLT handler. `DeliveryStatusTest` fails first. Widen both `status`
   columns in a migration before adding one.
+- **`EventIds.NAMESPACE` must never change**, and neither may the key's encoding (UTF-8).
+  The event id is derived from the `Idempotency-Key` under it (ADR 0006), so a new namespace
+  hands every client retrying across that deploy a new event id for an event that may
+  already be on the topic, and the worker delivers it twice. `EventIdsTest` pins the literal
+  and two derived values.
+- **acks and idempotence are set in `KafkaProducerConfig`, not in properties.** A
+  `spring.kafka.producer.acks` in the api's configuration is overridden, by design; the
+  explicit `enable.idempotence=true` turns a conflicting setting into a startup
+  `ConfigException` rather than a silent downgrade.
 - **Boot 4.1 is a young line.** Expect rough edges and bump patches early.

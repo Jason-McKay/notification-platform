@@ -19,9 +19,10 @@ import lombok.extern.slf4j.Slf4j;
  * Publishes accepted requests to {@link Topics#NOTIFICATION_REQUESTED}.
  *
  * <p><strong>The send is awaited on purpose.</strong> Fire-and-forget would let the api
- * answer 202 for a request the broker never took, and the idempotency key would already be
- * claimed, so the client's retry would be swallowed as a duplicate. Blocking for the ack
- * costs a few milliseconds and turns a lost notification into an honest 5xx.
+ * answer 202 for a request the broker never took, and record its idempotency key as
+ * published, so the client's retry would be answered as a duplicate of an event that does not
+ * exist. Blocking for the ack costs a few milliseconds and turns a lost notification into an
+ * honest 5xx.
  */
 @Component
 @RequiredArgsConstructor
@@ -46,7 +47,14 @@ public class NotificationEventPublisher {
     }
   }
 
-  /** Thrown when the broker did not acknowledge the event within the timeout. */
+  /**
+   * Thrown when the broker did not acknowledge the event within the timeout.
+   *
+   * <p>Not acknowledged is not the same as not written. A timed-out send is still being
+   * retried inside the producer, for up to {@code delivery.timeout.ms}, and may land after
+   * the caller has been told it failed. That is why a retry must carry the same event id
+   * (ADR 0006).
+   */
   public static class PublishFailedException extends RuntimeException {
     public PublishFailedException(NotificationRequested event, Throwable cause) {
       super("failed to publish notification event " + event.eventId(), cause);

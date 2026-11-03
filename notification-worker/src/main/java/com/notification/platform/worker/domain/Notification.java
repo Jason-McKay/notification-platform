@@ -21,9 +21,11 @@ import lombok.Setter;
 /**
  * The delivery record for one notification.
  *
- * <p>The primary key is the event id from the topic, not a generated one. That is what
- * makes a Kafka redelivery harmless: the second insert of the same event collides with the
- * row already there instead of sending the notification twice.
+ * <p>The primary key is the event id from the topic, not a generated one, so a second copy
+ * of an event can never become a second row: a Kafka redelivery, or the api republishing an
+ * id it could not confirm (ADR 0006). What stops the second send is
+ * {@code DeliveryRecorder.claim}, which looks the event id up before inserting and skips a
+ * row that is already SENT; the key is the backstop behind it.
  */
 @Entity
 @Table(name = "notification")
