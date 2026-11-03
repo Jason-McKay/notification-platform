@@ -1,0 +1,11 @@
+# Loads every dashboard JSON under /etc/grafana/dashboards. UI edits cannot be saved: the
+# committed JSON is the dashboard, so change that and restart Grafana.
+apiVersion: 1
+
+providers:
+  - name: notification-platform
+    type: file
+    disableDeletion: true
+    allowUiUpdates: false
+    options:
+      path: /etc/grafana/dashboards

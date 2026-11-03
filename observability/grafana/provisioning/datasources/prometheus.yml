@@ -1,0 +1,14 @@
+# The compose Prometheus, provisioned so the dashboard can name it by a fixed uid.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: np-prometheus
+    type: prometheus
+    access: proxy
+    url: http://np-prometheus:9090
+    isDefault: true
+    editable: false
+    jsonData:
+      # The scrape interval, so $__rate_interval never asks rate() for fewer than two samples.
+      timeInterval: 15s

@@ -6,12 +6,14 @@
 # Redis, MySQL and a catch-all SMTP server. Mail the worker sends is readable at
 # http://localhost:8025 -- nothing leaves the machine. The api is on http://localhost:8080 (Swagger at
 # http://localhost:8080/api/swagger-ui.html) and the worker's status read on
-# http://localhost:8081.
+# http://localhost:8081. Prometheus scrapes both on http://localhost:9090, and Grafana opens
+# on their dashboard at http://localhost:3000, no login needed.
 #
 # Self-contained on purpose: it does NOT use the shared ../infrastructure stack. Container
 # names are prefixed np- and host ports are shifted off the defaults so this can run beside
 # that stack's dev-redis:6379 / dev-mysql:3306. The api's 8080 still collides with
-# message-inspector -- run one at a time.
+# message-inspector -- run one at a time. Prometheus and Grafana keep their defaults, 9090
+# and 3000, like Mailpit's ports: nothing else here uses them.
 services:
   kafka:
     image: apache/kafka:3.9.0
@@ -132,5 +134,81 @@ services:
     ports:
       - "8081:8081"
 
+  # Keeps a dev token in a shared volume for Prometheus to scrape with: both apps'
+  # /actuator/prometheus take the read scope, and dev tokens last an hour. Compose only --
+  # a real deployment needs a credential from an identity provider (ADR 0007).
+  scrape-token:
+    image: curlimages/curl:8.23.0
+    container_name: np-scrape-token
+    # Root only to write into the named volume, whose mount point Docker creates root-owned.
+    user: "0"
+    entrypoint: ["/bin/sh", "/scrape-token.sh"]
+    depends_on:
+      api:
+        condition: service_started
+    environment:
+      # The documented dev credential from application.properties, not a secret.
+      CLIENT_ID: notification-client
+      CLIENT_SECRET: dev-secret
+    volumes:
+      - ./observability/scrape-token.sh:/scrape-token.sh:ro
+      - np_scrape_token:/token
+    healthcheck:
+      # CMD-SHELL because test is only a shell builtin in this image.
+      test: ["CMD-SHELL", "test -s /token/scrape"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 120s
+
+  prometheus:
+    image: prom/prometheus:v3.15.1
+    container_name: np-prometheus
+    depends_on:
+      scrape-token:
+        condition: service_healthy
+    volumes:
+      - ./observability/prometheus:/etc/prometheus:ro
+      - np_scrape_token:/token:ro
+      # Named, or the image's VOLUME leaves an anonymous volume behind on every down.
+      - np_prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:9090/-/ready"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # The datasource and the dashboard are provisioned from observability/grafana, and UI edits
+  # are refused, so the committed JSON is the dashboard. Nothing else is kept: no data volume.
+  grafana:
+    image: grafana/grafana:13.3.0
+    container_name: np-grafana
+    depends_on:
+      prometheus:
+        condition: service_healthy
+    environment:
+      # Local dev only: anyone who reaches :3000 sees the dashboards without logging in, as a
+      # viewer who cannot change anything.
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /etc/grafana/dashboards/notification-platform.json
+    volumes:
+      # The two directories only, so the image's other provisioning directories stay.
+      - ./observability/grafana/provisioning/datasources:/etc/grafana/provisioning/datasources:ro
+      - ./observability/grafana/provisioning/dashboards:/etc/grafana/provisioning/dashboards:ro
+      - ./observability/grafana/dashboards:/etc/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/api/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 30s
+
 volumes:
   np_mysql_data:
+  np_scrape_token:
+  np_prometheus_data:

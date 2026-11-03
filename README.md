@@ -21,7 +21,8 @@ different reasons, which is the point of the exercise.
 docker compose up --build
 ```
 
-Brings up Kafka, Redis, MySQL and both applications. Then, from
+Brings up Kafka, Redis, MySQL and both applications, with Prometheus and Grafana over them
+(see [Observability](#observability)). Then, from
 `http/notification-platform.http` (select the `dev` environment), or by hand:
 
 ```bash
@@ -78,14 +79,63 @@ reasoning.
 
 Metrics are `notification.delivery` (a counter tagged `channel` and `outcome`: `sent`,
 `failed`, `dead_lettered`) and `notification.dispatch.duration` (a timer tagged `channel`).
-`/actuator/metrics` and `/actuator/prometheus` take the same read scope;
-`/actuator/health` is open. A Prometheus server therefore needs a bearer token to scrape,
-which is why compose does not run one.
+`/actuator/metrics` and `/actuator/prometheus` take the same read scope, on the api too;
+`/actuator/health` is open. Compose scrapes them with a dev token it keeps fresh, below.
 
 ```bash
 curl -s 'localhost:8081/actuator/metrics/notification.delivery?tag=outcome:failed' \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+## Observability
+
+The same `docker compose up --build` starts Prometheus and Grafana. Once the images are
+built (the first build downloads Maven's dependencies and takes longer), live graphs are two
+steps away:
+
+```bash
+./observability/load.sh            # bash and curl
+```
+
+```powershell
+.\observability\load.ps1           # Windows PowerShell
+# if scripts are disabled: powershell -ExecutionPolicy Bypass -File .\observability\load.ps1
+```
+
+Then open http://localhost:3000. Grafana opens on the dashboard, with no login.
+
+![The Notification Platform dashboard in Grafana](docs/dashboard.png)
+
+The load script gets a token with the dev credential above and sends 300 notifications,
+200 ms apart, rotating the three channels. Every 10th repeats the one before it, so the api
+answers it as a duplicate; every 20th names a template the worker does not have, so it fails
+three tries and is dead-lettered. `COUNT` and `DELAY_SECONDS` (bash), or `-Count` and
+`-DelayMs` (PowerShell), change the mix's length and pace.
+
+| Metric | From | Tags | On the dashboard |
+|---|---|---|---|
+| `notification.ingress` | api | `outcome`: `accepted`, `duplicate`, `publish_failed` | requests per second |
+| `notification.publish.duration` | api | none | publish p50/p95 |
+| `notification.delivery` | worker | `channel`, `outcome`: `sent`, `failed`, `dead_lettered` | deliveries per second, the dead-lettered and failed counts |
+| `notification.dispatch.duration` | worker | `channel` | dispatch p50/p95 |
+| `kafka.consumer.fetch.manager.records.lag` | worker, bound by Boot | `topic`, `partition` | consumer lag |
+| `jvm.memory.*`, `process.cpu.usage` | both | `area`, `id` on the memory ones | heap and CPU |
+
+Every tag has a fixed set of values: no recipient, key or event id. The latency panels draw
+only while there is traffic, since a quantile of no requests has no value.
+
+Prometheus is on http://localhost:9090. Its six alert rules are in
+`observability/prometheus/alerts.yml`, with promtool tests beside them, and show on
+http://localhost:9090/alerts: a dead-lettered event, a high failure ratio, slow dispatch,
+failing publishes, a target down and growing consumer lag. Nothing routes them anywhere:
+compose runs no Alertmanager. The load script's dead-lettered events fire the first within
+half a minute of parking (one scrape and one evaluation, 15s each).
+
+Both apps' `/actuator/prometheus` take the read scope, so compose runs a small
+`scrape-token` container that fetches a dev token, refreshes it every 30 minutes, and leaves
+it in a volume Prometheus reads on every scrape. That is a dev arrangement and stays inside
+compose: [ADR 0007](docs/adr/0007-scraping-inside-compose.md) has why it is not a
+management port, and what a real deployment needs instead.
 
 ## Building
 
@@ -105,6 +155,7 @@ The non-obvious ones are recorded in [`docs/adr/`](docs/adr/README.md):
 - [0004](docs/adr/0004-the-provider-call-leaves-the-transaction.md) — the provider call leaves the transaction
 - [0005](docs/adr/0005-delivery-states-and-the-read-api.md) — delivery states, the read api, and what the metrics expose
 - [0006](docs/adr/0006-delivery-guarantees.md) — delivery guarantees: a derived event id, and keys recorded after the ack
+- [0007](docs/adr/0007-scraping-inside-compose.md) — scraping inside compose: a refreshed dev token, not a management port
 
 `CLAUDE.md` carries the working notes: commands, conventions, and the traps this stack has
 already sprung.

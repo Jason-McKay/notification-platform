@@ -48,8 +48,8 @@ the jar into `BOOT-INF/classes` and the other modules stop being able to consume
 GET from :8081: `GET /api/notifications` (a filtered page, newest first),
 `/api/notifications/stats` (counts over the last 24h) and `/api/notifications/{eventId}`
 (one delivery and its attempts), all in `NotificationStatusController` and all under the
-read scope, as are `/actuator/metrics/**` and `/actuator/prometheus`. None returns the
-payload. States, contract and metric names: [ADR 0005](docs/adr/0005-delivery-states-and-the-read-api.md).
+read scope, as are `/actuator/metrics/**` and `/actuator/prometheus` on both apps. None
+returns the payload. States, contract and metric names: [ADR 0005](docs/adr/0005-delivery-states-and-the-read-api.md).
 
 **With an `Idempotency-Key`, the event id is derived from it** (`EventIds`, UUIDv5), and Redis
 records the key only after the broker's ack, so a retry carries the same id and the worker
@@ -66,8 +66,15 @@ Maven wrapper (`./mvnw` in Bash, `.\mvnw.cmd` in PowerShell), from the repo root
 ./mvnw verify                               # unit + *IT (failsafe, Testcontainers -> needs Docker)
 ./mvnw -pl notification-api -am test        # one module, building what it depends on
 ./mvnw -pl notification-api spring-boot:run
-docker compose up --build                   # whole stack: kafka, redis, mysql, both apps
+docker compose up --build                   # whole stack: kafka, redis, mysql, both apps, prometheus, grafana
 ```
+
+**Observability lives in `observability/`** and runs only in compose ([ADR 0007](docs/adr/0007-scraping-inside-compose.md)):
+`scrape-token.sh` (the sidecar that keeps Prometheus a dev token), `prometheus/` (scrape
+config, `alerts.yml`, `alerts.test.yml`), `grafana/` (provisioned datasource and the one
+dashboard, uid `notification-platform`; UI edits are refused, so change the JSON) and
+`load.ps1`/`load.sh` (traffic for the dashboard). Grafana http://localhost:3000, Prometheus
+http://localhost:9090/alerts. Api meters are in `IngressMetrics`, the worker's in `DeliveryMetrics`.
 
 `-pl <module>` **without `-am` fails** unless the root pom and `notification-common` are
 already installed: a module's parent is this repo's aggregator. Run `./mvnw install` once,
@@ -96,7 +103,11 @@ Rules, with the reasons in `docs/testing.md`:
   `NotificationReadIT` (the read api against real MySQL), `DeliveryRecorderTest`
   (transitions), `DeliveryStatusTest` (names fit the columns), `EmailNotificationSenderTest`
   (GreenMail inside the test JVM), `EventIdsTest` (the derivation cannot drift),
-  `KafkaProducerConfigTest` (acks and idempotence cannot be weakened).
+  `KafkaProducerConfigTest` (acks and idempotence cannot be weakened), `IngressMetricsTest`
+  and `DeliveryMetricsTest` (every series exists at zero, the dispatch histogram is published),
+  `alerts.test.yml` (promtool rule tests).
+- **CI's `observability` job runs promtool** (`check config --syntax-only`, `check rules`,
+  `test rules`) in the image compose pins: keep the two `prom/prometheus` tags in step.
 - **The consumer needs `ErrorHandlingDeserializer`, and the worker needs a producer that
   serializes both a `NotificationRequested` and a raw `byte[]`** (`KafkaProducerConfig`).
   `poisonRecordEndsUpOnTheDeadLetterTopic` pins both.
@@ -138,8 +149,14 @@ Rules, with the reasons in `docs/gotchas.md`:
   before the sources.
 - **Port and container collisions.** `compose.yaml` uses `np-` container names on shifted host
   ports (Redis 6380, MySQL 3307, Kafka 19092) so it runs beside `infrastructure`; Mailpit is on
-  its defaults (SMTP 1025, inbox http://localhost:8025). The api on :8080 still collides with
-  message-inspector — run one at a time.
+  its defaults (SMTP 1025, inbox http://localhost:8025), as are Prometheus 9090 and Grafana
+  3000. The api on :8080 still collides with message-inspector — run one at a time.
+- **`management.server.port` moves every actuator endpoint and reuses the main security
+  chain**, so it cannot open one endpoint on an internal port (ADR 0007).
+- **Boot's Kafka metrics bind only to factories Boot builds**: consumer metrics, lag
+  included, bind on the worker; neither app's own producer factory reports any.
+- **Kafka tags each topic twice** (`notification.requested`, `notification_requested`): match
+  the dotted form in PromQL or lag sums double.
 - **`spring-boot-starter-mail-test` ships no mail server.** The tests use GreenMail 2.x,
   pinned in the root pom; 1.x is `javax.mail`.
 - **Template placeholders are `{{name}}`, not `${name}`**, or the worker will not start.
@@ -165,7 +182,10 @@ Each is a line here; why it is open, and what closing it would take, is in `docs
 - The list pages by offset over `updated_at`, so a client paging during deliveries can see a
   row twice or miss one (ADR 0005).
 - A `@DltHandler` that throws sends the record back to the DLT. Left alone.
-- Compose runs no Prometheus server: scraping needs a bearer token and dev tokens last an hour.
+- **Scraping is solved inside compose only**: a sidecar refreshes a dev token (which also
+  carries the write scope). A real deployment needs a scrape credential from the IdP.
+- No Kafka producer metrics, lag only as the worker's client reports it, no Alertmanager, and
+  a Redis failure before the publish is counted by no ingress outcome.
 - Rows parked before RETRYING/DEAD_LETTERED still read `FAILED`, and the new states are
   one-way: a rollback maps them back by hand first (the SQL is in ADR 0005).
 - Only the main topic and the DLT are declared as beans; retry topics are created on demand.

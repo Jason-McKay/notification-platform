@@ -44,6 +44,10 @@ public class SecurityConfig {
         // Authenticated is not authorised: the write needs the scope that names it, or a
         // token minted for reading would be enough to publish.
         .requestMatchers(HttpMethod.POST, "/api/notifications").hasAuthority(Scopes.WRITE_AUTHORITY)
+        // Ingress counts are operational reads, so they take the read scope, as the worker's
+        // delivery metrics do, rather than being open like health.
+        .requestMatchers("/actuator/metrics/**", "/actuator/prometheus")
+          .hasAuthority(Scopes.READ_AUTHORITY)
         .anyRequest().authenticated())
       .oauth2ResourceServer(oauth2 -> oauth2.jwt(jwt -> {
       }));

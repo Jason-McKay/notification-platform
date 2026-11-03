@@ -32,8 +32,27 @@ text below says "this file", it means `CLAUDE.md` as it stood when the passage w
 - A `@DltHandler` that throws sends the record back to the DLT (spring-kafka's default
   `ALWAYS_RETRY_ON_ERROR`). Left alone because it is retry behaviour; the handler only
   writes two rows.
-- Prometheus needs a bearer token to scrape, and dev tokens last an hour, so compose runs no
-  Prometheus server. A service credential is the IdP's job.
+- **Scraping is solved inside compose only** (ADR 0007, 2026-11-03). Both apps'
+  `/actuator/prometheus` take the read scope and dev tokens last an hour, so compose runs a
+  `scrape-token` container that keeps a fresh dev token in a volume for Prometheus. A real
+  deployment still needs a scrape credential from the IdP, ideally a read-only one: the
+  compose token carries the write scope too, because there is one client credential.
+- Kafka producer metrics are bound in neither app. Boot's `KafkaMetricsAutoConfiguration`
+  adds its Micrometer listener through customizers of the factories Boot builds, and both
+  apps build their own `DefaultKafkaProducerFactory` (`KafkaProducerConfig`). A
+  `MicrometerProducerListener` on each would bind them; the api's publish timer covers the
+  latency that matters meanwhile. Consumer metrics, lag included, do bind.
+- Consumer lag is what the worker's own Kafka client reports for the partitions it holds, so
+  a stopped worker reports none and the lag panel goes blank when lag is growing fastest.
+  `NotificationTargetDown` covers that case; broker-side lag would need an exporter.
+- Compose runs no Alertmanager: the rules fire on http://localhost:9090/alerts and notify
+  nobody.
+- A Redis failure before the publish is a 5xx that no `notification.ingress` outcome counts:
+  nothing was accepted, duplicated or published. `http_server_requests` still shows it, as a
+  5xx on the POST.
+- Compose publishes Prometheus and Grafana on every interface, like the rest of its ports,
+  and Grafana keeps its stock admin login beside the anonymous viewer. Fine on a dev machine,
+  not on a shared network.
 - Rows parked before the RETRYING/DEAD_LETTERED states existed still read `FAILED`; nothing
   backfills them. The new states are also one-way: older code cannot load them, so a
   rollback maps them back by hand first (the SQL is in ADR 0005).
@@ -74,6 +93,8 @@ text below says "this file", it means `CLAUDE.md` as it stood when the passage w
   retry.
 - `NotificationEventPublisher` awaits the ack for 5s, but `KafkaTemplate.send` can first block
   for up to `max.block.ms` (60s) fetching metadata, so a dead broker holds a request thread for
-  about a minute before the 5xx.
+  about a minute before the 5xx. The publish timer shows it: with the compose broker stopped
+  (2026-11-03), its max read 60s and `publish_failed` counted about a minute after the
+  request.
 - OWASP Dependency-Check is not wired in; add it with the `dep-audit` skill (needs the
   `NVD_API_KEY` secret) once the dependency set settles.

@@ -1,0 +1,116 @@
+# promtool unit tests for alerts.yml. Series are written as the apps export them, labels and
+# all, so a renamed meter or tag fails here rather than as an alert that can never fire.
+#
+#   promtool test rules alerts.test.yml
+#
+# Series notation: 'a+bxN' is a, then N more samples each b higher, one per interval.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 15s
+
+tests:
+  # One event parks at 5m15s. The alert fires with no 'for', and resolves once the 5-minute
+  # window has moved past the increase.
+  - interval: 15s
+    input_series:
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="EMAIL",outcome="dead_lettered"}'
+        values: '0x20 1x40'
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="SMS",outcome="dead_lettered"}'
+        values: '0x60'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: NotificationDeadLettered
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: NotificationDeadLettered
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: EMAIL
+            exp_annotations:
+              summary: "EMAIL notification dead-lettered"
+              description: "At least one EMAIL notification exhausted its retries in the last 5 minutes. List them on the worker: GET /api/notifications?status=DEAD_LETTERED&channel=EMAIL"
+      - eval_time: 11m
+        alertname: NotificationDeadLettered
+        exp_alerts: []
+
+  # The worker stops answering at 1m15s. Pending, not firing, until it has been down a minute.
+  # The api stays up throughout and never alerts.
+  - interval: 15s
+    input_series:
+      - series: 'up{job="notification-worker",instance="np-worker:8081"}'
+        values: '1x4 0x12'
+      - series: 'up{job="notification-api",instance="np-api:8080"}'
+        values: '1x16'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: NotificationTargetDown
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: NotificationTargetDown
+        exp_alerts: []
+      - eval_time: 2m30s
+        alertname: NotificationTargetDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              job: notification-worker
+              instance: np-worker:8081
+            exp_annotations:
+              summary: "notification-worker cannot be scraped"
+              description: "Prometheus has failed to scrape np-worker:8081 for a minute. Either the app is down, or it refused the scrape (check the scrape-token container's log)."
+
+  # SMS fails a third of its tries, EMAIL one in eleven, PUSH has no traffic at all (0/0).
+  # Only SMS fires, and only once the ratio has held for 5 minutes.
+  - interval: 15s
+    input_series:
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="SMS",outcome="sent"}'
+        values: '0+6x40'
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="SMS",outcome="failed"}'
+        values: '0+3x40'
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="EMAIL",outcome="sent"}'
+        values: '0+10x40'
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="EMAIL",outcome="failed"}'
+        values: '0+1x40'
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="PUSH",outcome="sent"}'
+        values: '0x40'
+      - series: 'notification_delivery_total{job="notification-worker",instance="np-worker:8081",channel="PUSH",outcome="failed"}'
+        values: '0x40'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: NotificationFailureRatioHigh
+        exp_alerts: []
+      - eval_time: 6m
+        alertname: NotificationFailureRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              channel: SMS
+            exp_annotations:
+              summary: "SMS tries are failing"
+              description: "33.33% of SMS tries failed over the last 5 minutes."
+
+  # The main topic's lag climbs past 100 and keeps climbing; a retry topic's lag sits flat
+  # above the floor. The underscore duplicate Kafka also reports must not double the sum.
+  - interval: 1m
+    input_series:
+      - series: 'kafka_consumer_fetch_manager_records_lag{job="notification-worker",topic="notification.requested",partition="0"}'
+        values: '0+20x30'
+      - series: 'kafka_consumer_fetch_manager_records_lag{job="notification-worker",topic="notification_requested",partition="0"}'
+        values: '0+20x30'
+      - series: 'kafka_consumer_fetch_manager_records_lag{job="notification-worker",topic="notification.requested-retry-1000",partition="0"}'
+        values: '500x30'
+    alert_rule_test:
+      - eval_time: 10m
+        alertname: NotificationConsumerLagGrowing
+        exp_alerts: []
+      - eval_time: 25m
+        alertname: NotificationConsumerLagGrowing
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              topic: notification.requested
+            exp_annotations:
+              summary: "Consumer lag on notification.requested keeps growing"
+              description: "The worker is 500 records behind on notification.requested and the lag has grown for 10 minutes."

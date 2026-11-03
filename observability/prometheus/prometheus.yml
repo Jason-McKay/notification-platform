@@ -1,0 +1,28 @@
+# Scrapes both applications over the compose network. Their /actuator/prometheus endpoints
+# take the read scope, so every scrape carries the dev token that the scrape-token sidecar
+# keeps fresh in /token/scrape. See docs/adr/0007-scraping-inside-compose.md.
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+# Relative to this file. Shown on http://localhost:9090/alerts.
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: notification-api
+    metrics_path: /actuator/prometheus
+    authorization:
+      type: Bearer
+      # Re-read on every scrape, so the sidecar's refresh needs no reload.
+      credentials_file: /token/scrape
+    static_configs:
+      - targets: ["np-api:8080"]
+
+  - job_name: notification-worker
+    metrics_path: /actuator/prometheus
+    authorization:
+      type: Bearer
+      credentials_file: /token/scrape
+    static_configs:
+      - targets: ["np-worker:8081"]

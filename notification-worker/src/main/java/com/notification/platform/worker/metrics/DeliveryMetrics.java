@@ -39,9 +39,12 @@ public class DeliveryMetrics {
       sent.put(channel, deliveries(registry, channel, "sent"));
       failed.put(channel, deliveries(registry, channel, "failed"));
       deadLettered.put(channel, deliveries(registry, channel, "dead_lettered"));
+      // Buckets, not client-side percentiles: a p95 has to be aggregated in Prometheus, across
+      // instances and over whatever window a panel or an alert asks for.
       dispatches.put(channel, Timer.builder(DISPATCH_DURATION)
           .description("Time to dispatch one event, whether it was sent or failed")
           .tag("channel", channel.name())
+          .publishPercentileHistogram()
           .register(registry));
     }
   }

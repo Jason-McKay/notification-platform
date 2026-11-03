@@ -7,6 +7,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 
+import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -21,6 +22,7 @@ import com.notification.platform.api.dto.NotificationRequest;
 import com.notification.platform.api.dto.NotificationResponse;
 import com.notification.platform.api.integration.cache.IdempotencyStore;
 import com.notification.platform.api.integration.kafka.NotificationEventPublisher;
+import com.notification.platform.api.metrics.IngressMetrics;
 import com.notification.platform.common.event.NotificationChannel;
 import com.notification.platform.common.event.NotificationRequested;
 
@@ -41,6 +43,10 @@ import static org.mockito.Mockito.when;
  * The dedupe decisions. These are the ones worth testing: a retry that gets a new event id
  * after a publish that did land sends a customer two messages, and a key recorded for a
  * publish that failed swallows the client's retry.
+ *
+ * <p>Each also pins what it counts, since the ingress counter is what the dashboard and the
+ * publish-failure alert read: one outcome per answered request, and none for a request that
+ * failed before anything was published.
  */
 @ExtendWith(MockitoExtension.class)
 class NotificationIngressServiceTest {
@@ -56,6 +62,11 @@ class NotificationIngressServiceTest {
 
   @Spy
   private final Clock clock = Clock.fixed(NOW, ZoneOffset.UTC);
+
+  private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+
+  @Spy
+  private final IngressMetrics metrics = new IngressMetrics(registry);
 
   @InjectMocks
   private NotificationIngressService service;
@@ -83,6 +94,7 @@ class NotificationIngressServiceTest {
     assertThat(published.getValue().partitionKey()).isEqualTo("user-42");
     assertThat(response.eventId()).isEqualTo(DERIVED);
     assertThat(response.duplicate()).isFalse();
+    assertCounted(1, 0, 0);
   }
 
   @Test
@@ -96,6 +108,7 @@ class NotificationIngressServiceTest {
     assertThat(response.duplicate()).isTrue();
     verifyNoInteractions(publisher);
     verify(idempotencyStore, never()).recordPublished(any(), any());
+    assertCounted(0, 1, 0);
   }
 
   @Test
@@ -119,6 +132,7 @@ class NotificationIngressServiceTest {
         .containsExactly(DERIVED, DERIVED);
     assertThat(retry.eventId()).isEqualTo(DERIVED);
     assertThat(retry.duplicate()).isFalse();
+    assertCounted(1, 0, 1);
   }
 
   @Test
@@ -133,6 +147,9 @@ class NotificationIngressServiceTest {
 
     verify(idempotencyStore).findPublished("key-1");
     verifyNoMoreInteractions(idempotencyStore);
+    // Counted once the throw is known, and the publish timed all the same.
+    assertCounted(0, 0, 1);
+    assertThat(registry.get("notification.publish.duration").timer().count()).isEqualTo(1);
   }
 
   @Test
@@ -156,6 +173,8 @@ class NotificationIngressServiceTest {
     assertThat(published.getAllValues())
         .extracting(NotificationRequested::eventId)
         .containsExactly(DERIVED, DERIVED);
+    // Both were answered duplicate=false, so both count as accepted.
+    assertCounted(2, 0, 0);
   }
 
   @Test
@@ -169,6 +188,7 @@ class NotificationIngressServiceTest {
 
     assertThat(response.eventId()).isEqualTo(DERIVED);
     assertThat(response.duplicate()).isTrue();
+    assertCounted(0, 1, 0);
   }
 
   @Test
@@ -180,6 +200,7 @@ class NotificationIngressServiceTest {
         .isInstanceOf(RedisConnectionFailureException.class);
 
     verifyNoInteractions(publisher);
+    assertCounted(0, 0, 0);
   }
 
   @Test
@@ -190,5 +211,16 @@ class NotificationIngressServiceTest {
     assertThat(response.eventId().version()).isEqualTo(4);
     verify(publisher).publish(any());
     verifyNoInteractions(idempotencyStore);
+    assertCounted(1, 0, 0);
+  }
+
+  private void assertCounted(double accepted, double duplicate, double publishFailed) {
+    assertThat(ingress("accepted")).isEqualTo(accepted);
+    assertThat(ingress("duplicate")).isEqualTo(duplicate);
+    assertThat(ingress("publish_failed")).isEqualTo(publishFailed);
+  }
+
+  private double ingress(String outcome) {
+    return registry.get("notification.ingress").tag("outcome", outcome).counter().count();
   }
 }

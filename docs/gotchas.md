@@ -41,7 +41,23 @@ Most of these cost real time on the way in.
   and uses `np-` container names on shifted host ports (Redis 6380, MySQL 3307, Kafka
   19092) so both can run at once. Mailpit is the exception, on its own defaults: SMTP 1025
   and the inbox at http://localhost:8025. The api on :8080 still collides with message-inspector —
-  run one at a time.
+  run one at a time. Prometheus (9090) and Grafana (3000) keep their defaults too: neither
+  stack nor life-api (8090/8091) uses them.
+- **`management.server.port` moves every actuator endpoint, and keeps the main security
+  chain.** `WebMvcEndpointManagementContextConfiguration` is registered in the main context
+  when the management port is the server port and only in the child context when it is not,
+  so a separate port takes `/actuator/health` and the worker's scoped reads off :8080 and
+  :8081 too. And `ServletManagementChildContextConfiguration` registers the parent's
+  `springSecurityFilterChain` in the child, so the main port's rules apply on the management
+  port as well. Read from the Boot 4.1.1 jars; it is why ADR 0007 is a token and not a port.
+- **Boot's Kafka metrics bind only to the factories Boot builds.** `KafkaMetricsAutoConfiguration`
+  adds its Micrometer listeners through factory customizers, which a factory declared by hand
+  never sees. The worker's consumers use Boot's factory and report `kafka_consumer_*`; both
+  apps' producer factories are their own (`KafkaProducerConfig`), so no `kafka_producer_*`.
+- **Kafka reports each topic twice in the consumer metrics**, as `notification.requested`
+  and `notification_requested`, so a `sum by (topic)` over every series counts the lag
+  twice. The dashboard and the lag alert match the dotted form only
+  (`topic=~"notification\\.requested.*"`, which keeps the retry topics).
 - **`spring-boot-starter-mail-test` ships no mail server.** Despite the name it is only
   `spring-boot-starter-mail` plus `spring-boot-starter-test`, so the SMTP server the tests
   need is GreenMail, pinned in the root pom (the Boot BOM does not manage it). It must be

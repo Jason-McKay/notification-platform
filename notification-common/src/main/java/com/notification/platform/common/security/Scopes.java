@@ -10,7 +10,10 @@ package com.notification.platform.common.security;
  */
 public final class Scopes {
 
-  /** Read a delivery status. Served by the worker, which owns the tables. */
+  /**
+   * Read a delivery status, served by the worker, which owns the tables; or either app's
+   * metrics.
+   */
   public static final String READ = "notifications.read";
 
   /** Submit a notification request. Served by the api. */
