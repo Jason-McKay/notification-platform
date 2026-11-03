@@ -1,8 +1,3 @@
-| [0003](0003-worker-owns-the-schema.md) | The worker owns the schema, and therefore the status read | Accepted |
-| [0004](0004-the-provider-call-leaves-the-transaction.md) | The provider call leaves the transaction | Accepted |
-| [0005](0005-delivery-states-and-the-read-api.md) | Delivery states, the read api, and what the metrics expose | Accepted |
-| [0004](0004-the-provider-call-leaves-the-transaction.md) | The provider call leaves the transaction | Accepted |
-| [0005](0005-delivery-states-and-the-read-api.md) | Delivery states, the read api, and what the metrics expose | Accepted |
 # Architecture Decision Records
 
 Short records of decisions that were **not obvious**, written so the reasoning survives the
